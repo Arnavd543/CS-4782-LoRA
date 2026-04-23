@@ -205,3 +205,25 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Python
+__pycache__/
+*.pyc
+
+# Data
+data/*
+!data/README.md
+
+# Models / checkpoints
+*.pt
+*.bin
+*.ckpt
+
+# Logs
+results/*.log
+
+# VSCode
+.vscode/
+
+# Colab
+*.ipynb_checkpoints
