@@ -146,7 +146,7 @@ forward(x):
 ```
 
 - `W₀` is **frozen** (`requires_grad=False`)
-- `A` is initialized `~ N(0, 0.02)`, `B` is initialized to **zeros** (so ΔW = 0 at step 0)
+- `A` is initialized `~ N(0, 0.02)` (Gaussian, per paper §4), `B` is initialized to **zeros** (so ΔW = BA = 0 at step 0)
 - `inject_lora(model, rank, alpha, target_modules)` walks the model tree and replaces matching
   `nn.Linear` modules in-place
 
@@ -163,12 +163,13 @@ forward(x):
 | Hyperparameter | Value |
 |---------------|-------|
 | Rank `r` | 8 |
-| Alpha `α` | 16 |
+| Alpha `α` | 8 (= r, per Appendix C.2) |
 | Target modules | `query`, `value` |
 | Learning rate | 3e-4 |
 | Batch size | 32 |
 | Epochs | 3 |
 | Optimizer | AdamW |
+| LR schedule | Linear warmup (6%) then linear decay |
 
 ---
 

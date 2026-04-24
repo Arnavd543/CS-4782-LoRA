@@ -1,0 +1,33 @@
+# configs/lora_r8.yaml
+# LoRA fine-tuning config (rank=8, alpha=8) — paper default settings.
+
+run_name:       "lora_r8_sst2"
+wandb_project:  "lora-replication"
+
+# Model
+model_name:     "roberta-base"
+mode:           "lora"           # "full" | "lora"
+
+# LoRA
+rank:           8
+alpha:          8                # paper sets alpha = rank (Appendix C.2)
+lora_dropout:   0.0              # set > 0 to enable Improvement 3
+target_modules:
+  - "query"
+  - "value"
+
+# LoRA+ (Improvement 1) — set true to use asymmetric learning rates
+lora_plus:          false
+lora_plus_ratio:    16.0         # lr(B) = lr(A) * lora_plus_ratio
+
+# Task
+task:           "sst2"
+num_labels:     2
+max_length:     128
+
+# Training
+epochs:         3
+batch_size:     32
+learning_rate:  3.0e-4           # higher LR is safe since base weights are frozen
+weight_decay:   0.01
+warmup_ratio:   0.06             # linear warmup then linear decay (paper Appendix C.2)
