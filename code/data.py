@@ -74,14 +74,16 @@ def get_dataloaders(
         tokenized["train"],
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
+        num_workers=0,
+        pin_memory=True,
         collate_fn=collator,
     )
     val_loader = DataLoader(
         tokenized["validation"],
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
+        num_workers=0,
+        pin_memory=True,
         collate_fn=collator,
     )
 

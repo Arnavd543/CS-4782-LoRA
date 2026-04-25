@@ -97,7 +97,7 @@ def train(cfg: dict):
         name=run_name,
         config={**cfg, "trainable_params": trainable, "total_params": total},
     )
-    wandb.watch(model, log="gradients", log_freq=100)
+    wandb.watch(model, log=None)
 
     # ── Training loop ─────────────────────────────────────────────────────────
     loss_fn = torch.nn.CrossEntropyLoss()
