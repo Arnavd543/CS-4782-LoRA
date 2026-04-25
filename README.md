@@ -59,6 +59,7 @@ lora-replication/
 │   ├── data.py                # GLUE / SST-2 data loaders via HuggingFace datasets
 │   ├── train.py               # Training loop (supports full FT + LoRA modes)
 │   ├── evaluate.py            # Accuracy, trainable param count, GPU memory reporting
+│   ├── testing.py             # Experiment driver for rank sweep and module comparison
 │   └── configs/
 │       ├── baseline.yaml      # Full fine-tune hyperparameters
 │       └── lora_r8.yaml       # LoRA rank=8, alpha=16 hyperparameters
@@ -239,6 +240,29 @@ done
 ### All experiments (Colab one-liner)
 
 Open `notebooks/02_lora.ipynb` in Google Colab with a T4/A100 runtime and run all cells.
+
+### Automated experiment driver
+
+A new experiment driver is available in `code/testing.py`. It runs both:
+- a LoRA rank sweep vs full fine-tuning
+- a LoRA target-module comparison using fixed-rank low-rank adapters
+
+Run it with:
+
+```bash
+python code/testing.py
+```
+
+It writes results into:
+- `results/tables/`
+- `results/figures/`
+- `results/logs/`
+
+The driver also supports a custom module comparison rank and rank sweep list:
+
+```bash
+python code/testing.py --module_rank 4 --ranks 1 2 4 8 16 32
+```
 
 ---
 
