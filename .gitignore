@@ -227,3 +227,5 @@ results/*.log
 
 # Colab
 *.ipynb_checkpoints
+
+CLAUDE.md

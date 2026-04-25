@@ -61,8 +61,7 @@ def get_dataloaders(
             max_length=max_length,
         )
 
-    tokenized = raw.map(tokenize, batched=True, remove_columns=raw["train"].column_names
-                        if key2 is not None else None)
+    tokenized = raw.map(tokenize, batched=True, remove_columns=raw["train"].column_names)
 
     # SST-2 validation split is called 'validation'; keep label column
     tokenized = tokenized.rename_column("label", "labels")
