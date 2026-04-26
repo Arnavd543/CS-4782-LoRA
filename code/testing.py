@@ -50,7 +50,7 @@ def load_config(path: Path) -> Dict[str, Any]:
 
 def save_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]):
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -205,7 +205,7 @@ def run_rank_sweep(
         run_cfg = dict(lora_cfg)
         run_cfg["mode"] = "lora"
         run_cfg["rank"] = rank
-        run_cfg["alpha"] = 2 * rank
+        run_cfg["alpha"] = rank
         run_cfg["target_modules"] = target_modules
         run_name = f"lora_rank_{rank}"
         metrics = train_one_run(run_cfg, run_name=run_name)
@@ -224,7 +224,7 @@ def run_module_comparison(
         run_cfg = dict(cfg)
         run_cfg["mode"] = "lora"
         run_cfg["rank"] = rank
-        run_cfg["alpha"] = 2 * rank
+        run_cfg["alpha"] = rank
         run_cfg["target_modules"] = combo["targets"]
         run_name = f"lora_module_{combo['name'].replace(' ', '_')}"
         metrics = train_one_run(run_cfg, run_name=run_name)
