@@ -167,7 +167,7 @@ forward(x):
 | Alpha `α` | 8 (= rank, paper-style baseline) |
 | Target modules | `query`, `value` |
 | Learning rate | 5e-4 |
-| Batch size | 32 (`gradient_accumulation_steps=4` => effective 128) |
+| Batch size | 32 (`gradient_accumulation_steps=1`) |
 | Epochs | 10 (baseline block in notebook can be increased) |
 | Weight decay | 0.1 |
 | LoRA init | `A ~ N(0, 0.02)`, `B = 0` |

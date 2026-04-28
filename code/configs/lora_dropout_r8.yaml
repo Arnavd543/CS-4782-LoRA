@@ -33,5 +33,5 @@ batch_size:     32
 learning_rate:  5.0e-4
 weight_decay:   0.1
 warmup_ratio:   0.06
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 1
 seed: 0

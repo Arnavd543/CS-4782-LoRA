@@ -164,13 +164,14 @@ def main():
     ]
 
     print("[analyze] Processing logs...")
+    baseline_lora_key = "baseline_lora_r8_paper"
 
     # --- Baseline ---
-    if "baseline_full_ft" in logs and "baseline_lora_r8" in logs:
-        baseline_rows = [logs["baseline_full_ft"], logs["baseline_lora_r8"]]
+    if "baseline_full_ft" in logs and baseline_lora_key in logs:
+        baseline_rows = [logs["baseline_full_ft"], logs[baseline_lora_key]]
         save_csv(BASELINE_DIR / "baseline.csv", baseline_rows, fields)
-        plot_baseline_comparison(logs["baseline_full_ft"], logs["baseline_lora_r8"], BASELINE_DIR / "figures" / "baseline_comparison.png")
-        plot_param_efficiency(logs["baseline_full_ft"], logs["baseline_lora_r8"], BASELINE_DIR / "figures" / "param_efficiency.png")
+        plot_baseline_comparison(logs["baseline_full_ft"], logs[baseline_lora_key], BASELINE_DIR / "figures" / "baseline_comparison.png")
+        plot_param_efficiency(logs["baseline_full_ft"], logs[baseline_lora_key], BASELINE_DIR / "figures" / "param_efficiency.png")
 
     # --- Rank Sweep ---
     rank_runs = [v for k, v in logs.items() if k.startswith("lora_rank_")]
@@ -190,8 +191,8 @@ def main():
         if k.startswith("lora_module_"):
             v["combo_name"] = combo_names.get(v["target_modules"], v["target_modules"])
             module_runs.append(v)
-    if module_runs and "baseline_lora_r8" in logs:
-        base_lora = dict(logs["baseline_lora_r8"])
+    if module_runs and baseline_lora_key in logs:
+        base_lora = dict(logs[baseline_lora_key])
         base_lora["combo_name"] = "Q+V"
         module_rows = [base_lora] + module_runs
         save_csv(MODULE_CMP_DIR / "module_comparison.csv", module_rows, fields + ["combo_name"])
@@ -204,8 +205,8 @@ def main():
         if k in logs:
             ext_runs.append(logs[k])
     
-    if ext_runs and "baseline_lora_r8" in logs:
-        base_lora = dict(logs["baseline_lora_r8"])
+    if ext_runs and baseline_lora_key in logs:
+        base_lora = dict(logs[baseline_lora_key])
         base_lora["variant"] = "Baseline LoRA"
         for r in ext_runs:
             if r["run_name"] == "lora_plus_r8": r["variant"] = "LoRA+"

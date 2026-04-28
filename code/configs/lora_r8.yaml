@@ -34,6 +34,6 @@ batch_size:     32
 learning_rate:  5.0e-4
 weight_decay:   0.1
 warmup_ratio:   0.06             # linear warmup then linear decay (paper Appendix C.2)
-gradient_accumulation_steps: 4   # effective global batch 128
+gradient_accumulation_steps: 1
 seed: 0
 target_accuracy: 0.90
