@@ -1,5 +1,5 @@
 # configs/lora_plus_dropout_r8.yaml
-# LoRA+ fine-tuning config (rank=8, alpha=16) with dropout
+# LoRA+ fine-tuning config (rank=8, alpha=8) with dropout
 
 run_name:       "lora_plus_dropout_r8_sst2"
 wandb_project:  "lora-replication"
@@ -10,9 +10,9 @@ mode:           "lora"
 
 # LoRA
 rank:           8
-alpha:          16
+alpha:          8
 lora_dropout:   0.05
-lora_init:      "microsoft"
+lora_init:      "paper"
 lora_merge_weights: true
 lora_train_bias: "none"
 target_modules:

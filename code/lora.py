@@ -16,12 +16,12 @@ class LoraLinear(nn.Linear):
     """
     LoRA-augmented linear layer.
 
-    By default, this follows Microsoft loralib behavior:
-    - A uses Kaiming init and B is zero-initialized.
+    By default, this follows the paper description:
+    - A uses Gaussian init N(0, 0.02) and B is zero-initialized.
     - model.eval() merges BA into frozen base weight.
     - model.train() unmerges it back.
 
-    For paper-style init, set `init_method="paper"` (A ~ N(0, 0.02), B = 0).
+    For Microsoft loralib-style init, set `init_method="microsoft"` (A=Kaiming, B=0).
     """
 
     def __init__(
@@ -29,11 +29,11 @@ class LoraLinear(nn.Linear):
         in_features: int,
         out_features: int,
         rank: int = 8,
-        alpha: float = 16.0,
+        alpha: float = 8.0,
         dropout: float = 0.0,
         fan_in_fan_out: bool = False,
         merge_weights: bool = True,
-        init_method: str = "microsoft",
+        init_method: str = "paper",
         original_layer: Optional[nn.Linear] = None,
     ):
         bias = original_layer.bias is not None if original_layer is not None else True
@@ -148,10 +148,10 @@ def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
 def inject_lora(
     model: nn.Module,
     rank: int = 8,
-    alpha: float = 16.0,
+    alpha: float = 8.0,
     dropout: float = 0.0,
     target_modules: Optional[List[str]] = None,
-    init_method: str = "microsoft",
+    init_method: str = "paper",
     merge_weights: bool = True,
     train_classifier: bool = True,
     train_pooler: bool = True,

@@ -15,10 +15,10 @@ def build_model(
     model_name: str = "roberta-base",
     mode: str = "lora",          # "lora" | "full"
     rank: int = 8,
-    alpha: float = 16.0,
+    alpha: float = 8.0,
     dropout: float = 0.0,
     target_modules: list = None,
-    lora_init: str = "microsoft",
+    lora_init: str = "paper",
     lora_merge_weights: bool = True,
     lora_train_bias: str = "none",
 ):

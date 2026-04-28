@@ -62,7 +62,7 @@ lora-replication/
 │   ├── analyze.py             # Aggregates JSON logs into figures/CSVs
 │   └── configs/
 │       ├── baseline.yaml      # Full fine-tune hyperparameters
-│       └── lora_r8.yaml       # LoRA rank=8, alpha=16 baseline hyperparameters
+│       └── lora_r8.yaml       # Paper-style LoRA rank=8, alpha=8 baseline
 │
 ├── data/
 │   └── README.md              # How to obtain / reproduce datasets
@@ -164,12 +164,13 @@ forward(x):
 | Hyperparameter | Value |
 |---------------|-------|
 | Rank `r` | 8 |
-| Alpha `α` | 16 (matches Microsoft LoRA GLUE script) |
+| Alpha `α` | 8 (= rank, paper-style baseline) |
 | Target modules | `query`, `value` |
 | Learning rate | 5e-4 |
 | Batch size | 32 (`gradient_accumulation_steps=4` => effective 128) |
 | Epochs | 10 (baseline block in notebook can be increased) |
 | Weight decay | 0.1 |
+| LoRA init | `A ~ N(0, 0.02)`, `B = 0` |
 | Optimizer | AdamW |
 | LR schedule | Linear warmup (6%) then linear decay |
 
