@@ -1,35 +1,27 @@
 """
 lora.py
 -------
-Core LoRA implementation following Hu et al. 2021 (arXiv:2106.09685).
-
-Key components:
-    LoraLinear  – drop-in replacement for nn.Linear with low-rank adapters.
-    inject_lora – walks a model and replaces target modules in-place.
-    lora_state_dict – returns only the trainable LoRA + head parameters.
+Core LoRA implementation following the paper and Microsoft loralib behavior.
 """
+
+import math
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
-from typing import List, Optional
+import torch.nn.functional as F
 
 
-class LoraLinear(nn.Module):
+class LoraLinear(nn.Linear):
     """
-    A linear layer augmented with a low-rank adapter.
+    LoRA-augmented linear layer.
 
-    Forward pass:
-        h = W₀ x  +  (x Aᵀ Bᵀ) * (alpha / rank)
+    By default, this follows Microsoft loralib behavior:
+    - A uses Kaiming init and B is zero-initialized.
+    - model.eval() merges BA into frozen base weight.
+    - model.train() unmerges it back.
 
-    W₀ is frozen. A and B are the only trainable parameters in this layer.
-
-    Args:
-        in_features:  input dimension of the original linear layer.
-        out_features: output dimension of the original linear layer.
-        rank:         rank r of the low-rank decomposition.
-        alpha:        scaling factor alpha (paper recommends alpha = 2 * rank).
-        dropout:      dropout probability applied between A and B (0 = disabled).
-        original_layer: the nn.Linear being replaced; its weight is copied and frozen.
+    For paper-style init, set `init_method="paper"` (A ~ N(0, 0.02), B = 0).
     """
 
     def __init__(
@@ -39,57 +31,119 @@ class LoraLinear(nn.Module):
         rank: int = 8,
         alpha: float = 16.0,
         dropout: float = 0.0,
+        fan_in_fan_out: bool = False,
+        merge_weights: bool = True,
+        init_method: str = "microsoft",
         original_layer: Optional[nn.Linear] = None,
     ):
-        super().__init__()
+        bias = original_layer.bias is not None if original_layer is not None else True
+        super().__init__(in_features, out_features, bias=bias)
 
-        self.in_features = in_features
-        self.out_features = out_features
         self.rank = rank
         self.alpha = alpha
-        self.scaling = alpha / rank
+        self.scaling = alpha / rank if rank > 0 else 1.0
+        self.fan_in_fan_out = fan_in_fan_out
+        self.merge_weights = merge_weights
+        self.merged = False
+        self.init_method = init_method
 
-        # ── Frozen pretrained weight ──────────────────────────────────────────
-        self.weight = nn.Parameter(
-            original_layer.weight.data.clone() if original_layer is not None
-            else torch.empty(out_features, in_features),
-            requires_grad=False,
-        )
-        self.bias = None
-        if original_layer is not None and original_layer.bias is not None:
-            self.bias = nn.Parameter(
-                original_layer.bias.data.clone(), requires_grad=False
-            )
+        if rank > 0:
+            self.lora_A = nn.Parameter(self.weight.new_zeros((rank, in_features)))
+            self.lora_B = nn.Parameter(self.weight.new_zeros((out_features, rank)))
+            self.weight.requires_grad = False
+        else:
+            self.register_parameter("lora_A", None)
+            self.register_parameter("lora_B", None)
 
-        # ── Trainable low-rank matrices ───────────────────────────────────────
-        # A: shape (rank, in_features)  — Gaussian init (paper §4)
-        # B: shape (out_features, rank) — zero init so ΔW = BA = 0 at step 0
-        self.lora_A = nn.Parameter(torch.empty(rank, in_features))
-        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
-        nn.init.normal_(self.lora_A, mean=0.0, std=0.02)
+        if original_layer is not None:
+            self.weight.data.copy_(original_layer.weight.data)
+            if self.bias is not None and original_layer.bias is not None:
+                self.bias.data.copy_(original_layer.bias.data)
 
-        # Optional dropout between A and B (Improvement 3)
         self.lora_dropout = nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
 
+        if self.fan_in_fan_out:
+            self.weight.data = self.weight.data.transpose(0, 1)
+
+        self.reset_lora_parameters()
+
+    def reset_lora_parameters(self) -> None:
+        if self.rank <= 0:
+            return
+        if self.init_method == "microsoft":
+            nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+            nn.init.zeros_(self.lora_B)
+        elif self.init_method == "paper":
+            nn.init.normal_(self.lora_A, mean=0.0, std=0.02)
+            nn.init.zeros_(self.lora_B)
+        else:
+            raise ValueError(
+                f"Unknown LoRA init_method='{self.init_method}'. Use 'microsoft' or 'paper'."
+            )
+
+    def _transpose_if_needed(self, w: torch.Tensor) -> torch.Tensor:
+        return w.transpose(0, 1) if self.fan_in_fan_out else w
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.rank <= 0:
+            return self
+
+        delta_w = self._transpose_if_needed(self.lora_B @ self.lora_A) * self.scaling
+        if mode:
+            if self.merge_weights and self.merged:
+                self.weight.data -= delta_w
+                self.merged = False
+        else:
+            if self.merge_weights and not self.merged:
+                self.weight.data += delta_w
+                self.merged = True
+        return self
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Frozen base computation
-        base = nn.functional.linear(x, self.weight, self.bias)
-
-        # Low-rank adapter: x → A → dropout → B → scale
-        # x @ Aᵀ  : (..., in_features) → (..., rank)
-        # result @ Bᵀ : (..., rank) → (..., out_features)
-        lora_out = self.lora_dropout(x @ self.lora_A.t()) @ self.lora_B.t()
-
-        return base + lora_out * self.scaling
+        base = F.linear(x, self._transpose_if_needed(self.weight), bias=self.bias)
+        if self.rank > 0 and not self.merged:
+            lora_out = (
+                self.lora_dropout(x)
+                @ self.lora_A.transpose(0, 1)
+                @ self.lora_B.transpose(0, 1)
+            )
+            base = base + lora_out * self.scaling
+        return base
 
     def extra_repr(self) -> str:
         return (
-            f"in={self.in_features}, out={self.out_features}, "
-            f"rank={self.rank}, alpha={self.alpha}, scaling={self.scaling:.4f}"
+            f"in_features={self.in_features}, out_features={self.out_features}, "
+            f"rank={self.rank}, alpha={self.alpha}, scaling={self.scaling:.4f}, "
+            f"init={self.init_method}, merged={self.merged}"
         )
 
 
-# ── Injection ──────────────────────────────────────────────────────────────────
+def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
+    """
+    Match loralib behavior:
+    - bias='none': only LoRA parameters trainable
+    - bias='all': all bias parameters trainable too
+    - bias='lora_only': only bias inside LoRA-replaced modules trainable
+    """
+    for name, param in model.named_parameters():
+        if "lora_" not in name:
+            param.requires_grad = False
+
+    if bias == "none":
+        return
+    if bias == "all":
+        for name, param in model.named_parameters():
+            if "bias" in name:
+                param.requires_grad = True
+        return
+    if bias == "lora_only":
+        for module in model.modules():
+            if isinstance(module, LoraLinear) and module.bias is not None:
+                module.bias.requires_grad = True
+        return
+    raise NotImplementedError(f"Unsupported bias mode '{bias}'")
+
 
 def inject_lora(
     model: nn.Module,
@@ -97,112 +151,113 @@ def inject_lora(
     alpha: float = 16.0,
     dropout: float = 0.0,
     target_modules: Optional[List[str]] = None,
+    init_method: str = "microsoft",
+    merge_weights: bool = True,
+    train_classifier: bool = True,
+    train_pooler: bool = True,
+    train_bias: str = "none",
 ) -> nn.Module:
     """
-    Replace all nn.Linear layers whose name matches *any* entry in
-    `target_modules` with LoraLinear, preserving pretrained weights.
-
-    Args:
-        model:          the pretrained model to modify (mutated in-place).
-        rank:           LoRA rank r.
-        alpha:          LoRA scaling alpha.
-        dropout:        dropout probability inside the LoRA path.
-        target_modules: list of substring matches, e.g. ["query", "value"].
-                        If None, defaults to ["query", "value"] (paper default).
-
-    Returns:
-        model with LoRA layers injected and all non-LoRA params frozen.
+    Replace matching nn.Linear layers with LoraLinear in-place.
     """
     if target_modules is None:
         target_modules = ["query", "value"]
-
-    # First freeze everything
-    for param in model.parameters():
-        param.requires_grad = False
 
     replaced = 0
     for name, module in list(model.named_modules()):
         if not isinstance(module, nn.Linear):
             continue
-        if not any(t in name for t in target_modules):
+        if not any(target in name for target in target_modules):
             continue
 
-        # Navigate to the parent module so we can do setattr
         parts = name.split(".")
         parent = model
         for part in parts[:-1]:
             parent = getattr(parent, part)
         attr = parts[-1]
 
-        lora_layer = LoraLinear(
-            in_features=module.in_features,
-            out_features=module.out_features,
-            rank=rank,
-            alpha=alpha,
-            dropout=dropout,
-            original_layer=module,
+        setattr(
+            parent,
+            attr,
+            LoraLinear(
+                in_features=module.in_features,
+                out_features=module.out_features,
+                rank=rank,
+                alpha=alpha,
+                dropout=dropout,
+                merge_weights=merge_weights,
+                init_method=init_method,
+                original_layer=module,
+            ),
         )
-        setattr(parent, attr, lora_layer)
         replaced += 1
 
-    print(f"[inject_lora] Replaced {replaced} linear layers → LoraLinear "
-          f"(rank={rank}, alpha={alpha}, targets={target_modules})")
+    mark_only_lora_as_trainable(model, bias=train_bias)
 
-    # Unfreeze classification head (anything named 'classifier' or 'pooler')
     for name, param in model.named_parameters():
-        if any(k in name for k in ["classifier", "pooler", "lora_"]):
+        if train_classifier and "classifier" in name:
+            param.requires_grad = True
+        if train_pooler and "pooler" in name:
             param.requires_grad = True
 
+    print(
+        f"[inject_lora] Replaced {replaced} linear layers -> LoraLinear "
+        f"(rank={rank}, alpha={alpha}, init={init_method}, targets={target_modules})"
+    )
     _print_param_stats(model)
     return model
 
 
-def lora_state_dict(model: nn.Module) -> dict:
-    """Return only trainable parameters — safe to save as a small checkpoint."""
-    return {k: v for k, v in model.state_dict().items()
-            if any(n in k for n in ["lora_A", "lora_B", "classifier", "pooler"])}
+def lora_state_dict(
+    model: nn.Module,
+    bias: str = "none",
+    include_classifier: bool = True,
+    include_pooler: bool = True,
+) -> dict:
+    """
+    Return LoRA-focused state dict; includes head by default for classifier tasks.
+    """
+    state = model.state_dict()
 
+    keep_keys = set()
+    for key in state:
+        if "lora_" in key:
+            keep_keys.add(key)
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+    if bias == "all":
+        for key in state:
+            if "bias" in key:
+                keep_keys.add(key)
+    elif bias == "lora_only":
+        for key in list(keep_keys):
+            bias_key = key.split("lora_")[0] + "bias"
+            if bias_key in state:
+                keep_keys.add(bias_key)
+    elif bias != "none":
+        raise NotImplementedError(f"Unsupported bias mode '{bias}'")
+
+    if include_classifier:
+        for key in state:
+            if "classifier" in key:
+                keep_keys.add(key)
+    if include_pooler:
+        for key in state:
+            if "pooler" in key:
+                keep_keys.add(key)
+
+    return {k: state[k] for k in state if k in keep_keys}
+
 
 def _print_param_stats(model: nn.Module) -> None:
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"[inject_lora] Trainable: {trainable:,} / {total:,} "
-          f"({100 * trainable / total:.4f}%)")
+    print(
+        f"[inject_lora] Trainable: {trainable:,} / {total:,} "
+        f"({100 * trainable / total:.4f}%)"
+    )
 
 
 def count_parameters(model: nn.Module):
-    """Return (trainable, total) parameter counts."""
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return trainable, total
-
-
-# ── Improvement 1: LoRA+ — asymmetric learning rates ──────────────────────────
-
-def lora_plus_param_groups(model: nn.Module, lr_A: float, lr_B_multiplier: float = 16.0):
-    """
-    Return optimizer param groups with separate (lower) lr for lora_A
-    and (higher) lr for lora_B, following LoRA+ (Hayou et al. 2024).
-
-    Usage:
-        groups = lora_plus_param_groups(model, lr_A=1e-4, lr_B_multiplier=16.0)
-        optimizer = torch.optim.AdamW(groups)
-    """
-    lora_a, lora_b, other = [], [], []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if "lora_A" in name:
-            lora_a.append(param)
-        elif "lora_B" in name:
-            lora_b.append(param)
-        else:
-            other.append(param)
-
-    return [
-        {"params": lora_a, "lr": lr_A},
-        {"params": lora_b, "lr": lr_A * lr_B_multiplier},
-        {"params": other,  "lr": lr_A},
-    ]

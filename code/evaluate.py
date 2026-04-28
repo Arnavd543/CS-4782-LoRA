@@ -104,7 +104,11 @@ if __name__ == "__main__":
         mode=cfg["mode"],
         rank=cfg.get("rank", 8),
         alpha=cfg.get("alpha", 16.0),
+        dropout=cfg.get("lora_dropout", 0.0),
         target_modules=cfg.get("target_modules", ["query", "value"]),
+        lora_init=cfg.get("lora_init", "microsoft"),
+        lora_merge_weights=cfg.get("lora_merge_weights", True),
+        lora_train_bias=cfg.get("lora_train_bias", "none"),
     ).to(device)
 
     state = torch.load(args.checkpoint, map_location=device)

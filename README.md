@@ -59,10 +59,10 @@ lora-replication/
 │   ├── data.py                # GLUE / SST-2 data loaders via HuggingFace datasets
 │   ├── train.py               # Training loop (supports full FT + LoRA modes)
 │   ├── evaluate.py            # Accuracy, trainable param count, GPU memory reporting
-│   ├── testing.py             # Experiment driver for rank sweep and module comparison
+│   ├── analyze.py             # Aggregates JSON logs into figures/CSVs
 │   └── configs/
 │       ├── baseline.yaml      # Full fine-tune hyperparameters
-│       └── lora_r8.yaml       # LoRA rank=8, alpha=16 hyperparameters
+│       └── lora_r8.yaml       # LoRA rank=8, alpha=16 baseline hyperparameters
 │
 ├── data/
 │   └── README.md              # How to obtain / reproduce datasets
@@ -164,11 +164,12 @@ forward(x):
 | Hyperparameter | Value |
 |---------------|-------|
 | Rank `r` | 8 |
-| Alpha `α` | 8 (= r, per Appendix C.2) |
+| Alpha `α` | 16 (matches Microsoft LoRA GLUE script) |
 | Target modules | `query`, `value` |
-| Learning rate | 3e-4 |
-| Batch size | 32 |
-| Epochs | 3 |
+| Learning rate | 5e-4 |
+| Batch size | 32 (`gradient_accumulation_steps=4` => effective 128) |
+| Epochs | 10 (baseline block in notebook can be increased) |
+| Weight decay | 0.1 |
 | Optimizer | AdamW |
 | LR schedule | Linear warmup (6%) then linear decay |
 
@@ -229,39 +230,24 @@ python code/train.py --config code/configs/baseline.yaml
 python code/train.py --config code/configs/lora_r8.yaml
 ```
 
-### Rank sweep
+### Rank sweep (lower compute)
 
 ```bash
 for r in 1 2 4 8 16 32; do
-  python code/train.py --config code/configs/lora_r8.yaml --rank $r --run_name lora_r${r}
+  python code/train.py --config code/configs/lora_r8.yaml --epochs 3 --rank $r --run_name lora_rank_${r}
 done
 ```
 
 ### All experiments (Colab one-liner)
 
-Open `notebooks/02_lora.ipynb` in Google Colab with a T4/A100 runtime and run all cells.
+Open `code/Implement_LORA.ipynb` in Google Colab with a T4/A100 runtime and run all cells.
 
-### Automated experiment driver
+### Analyze collected logs
 
-A new experiment driver is available in `code/testing.py`. It runs both:
-- a LoRA rank sweep vs full fine-tuning
-- a LoRA target-module comparison using fixed-rank low-rank adapters
-
-Run it with:
+After runs complete, aggregate figures and tables with:
 
 ```bash
-python code/testing.py
-```
-
-It writes results into:
-- `results/tables/`
-- `results/figures/`
-- `results/logs/`
-
-The driver also supports a custom module comparison rank and rank sweep list:
-
-```bash
-python code/testing.py --module_rank 4 --ranks 1 2 4 8 16 32
+python code/analyze.py
 ```
 
 ---

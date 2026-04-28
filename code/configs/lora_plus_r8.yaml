@@ -1,0 +1,39 @@
+# configs/lora_plus_r8.yaml
+# LoRA+ fine-tuning config (rank=8, alpha=16)
+
+run_name:       "lora_plus_r8_sst2"
+wandb_project:  "lora-replication"
+
+# Model
+model_name:     "roberta-base"
+mode:           "lora"
+
+# LoRA
+rank:           8
+alpha:          16
+lora_dropout:   0.0
+lora_init:      "microsoft"
+lora_merge_weights: true
+lora_train_bias: "none"
+target_modules:
+  - "query"
+  - "value"
+
+# LoRA+
+lora_plus:          true
+lora_plus_lr_A:     2.5e-4
+lora_plus_ratio:    16.0
+
+# Task
+task:           "sst2"
+num_labels:     2
+max_length:     128
+
+# Training
+epochs:         6
+batch_size:     32
+learning_rate:  2.5e-4
+weight_decay:   0.1
+warmup_ratio:   0.06
+gradient_accumulation_steps: 4
+seed: 0

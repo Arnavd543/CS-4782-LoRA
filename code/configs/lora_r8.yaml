@@ -1,7 +1,7 @@
 # configs/lora_r8.yaml
-# LoRA fine-tuning config (rank=8, alpha=8) — paper default settings.
+# LoRA fine-tuning config (rank=8, alpha=16) — close to Microsoft LoRA SST-2 script.
 
-run_name:       "lora_r8_sst2"
+run_name:       "baseline_lora_r8"
 wandb_project:  "lora-replication"
 
 # Model
@@ -10,8 +10,11 @@ mode:           "lora"           # "full" | "lora"
 
 # LoRA
 rank:           8
-alpha:          8                # paper sets alpha = rank (Appendix C.2)
+alpha:          16               # Microsoft LoRA GLUE script uses r=8, alpha=16
 lora_dropout:   0.0              # set > 0 to enable Improvement 3
+lora_init:      "microsoft"      # "microsoft" (A=kaiming, B=0) or "paper" (A~N(0,0.02), B=0)
+lora_merge_weights: true         # merge/unmerge on eval/train like loralib
+lora_train_bias: "none"
 target_modules:
   - "query"
   - "value"
@@ -26,8 +29,11 @@ num_labels:     2
 max_length:     128
 
 # Training
-epochs:         3
+epochs:         10
 batch_size:     32
-learning_rate:  3.0e-4           # higher LR is safe since base weights are frozen
-weight_decay:   0.01
+learning_rate:  5.0e-4           # matches microsoft/LoRA SST-2 script
+weight_decay:   0.1              # matches microsoft/LoRA SST-2 script
 warmup_ratio:   0.06             # linear warmup then linear decay (paper Appendix C.2)
+gradient_accumulation_steps: 4   # effective global batch 128
+seed: 0
+target_accuracy: 0.90

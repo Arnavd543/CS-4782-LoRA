@@ -1,7 +1,7 @@
 # configs/baseline.yaml
 # Full fine-tuning config — all RoBERTa-base parameters are trained.
 
-run_name:       "full_finetune_sst2"
+run_name:       "baseline_full_ft"
 wandb_project:  "lora-replication"
 
 # Model
@@ -14,8 +14,11 @@ num_labels:     2
 max_length:     128
 
 # Training
-epochs:         3
+epochs:         10
 batch_size:     32
 learning_rate:  2.0e-5
 weight_decay:   0.01
 warmup_ratio:   0.06             # linear warmup then linear decay (paper Appendix C.2)
+gradient_accumulation_steps: 4   # effective global batch 128 (closer to LoRA repo scripts)
+seed: 0
+target_accuracy: 0.90

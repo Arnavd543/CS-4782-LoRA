@@ -15,9 +15,12 @@ def build_model(
     model_name: str = "roberta-base",
     mode: str = "lora",          # "lora" | "full"
     rank: int = 8,
-    alpha: float = 8.0,
+    alpha: float = 16.0,
     dropout: float = 0.0,
     target_modules: list = None,
+    lora_init: str = "microsoft",
+    lora_merge_weights: bool = True,
+    lora_train_bias: str = "none",
 ):
     """
     Load pretrained RoBERTa-base and optionally inject LoRA adapters.
@@ -31,6 +34,9 @@ def build_model(
         alpha:          LoRA alpha scaling (ignored in full mode).
         dropout:        LoRA internal dropout (ignored in full mode).
         target_modules: which linear layer names to replace with LoraLinear.
+        lora_init:      LoRA initialization style ("microsoft" | "paper").
+        lora_merge_weights: merge LoRA weights into base on eval().
+        lora_train_bias: train bias policy for LoRA mode.
 
     Returns:
         nn.Module ready for training.
@@ -50,6 +56,9 @@ def build_model(
             alpha=alpha,
             dropout=dropout,
             target_modules=target_modules,
+            init_method=lora_init,
+            merge_weights=lora_merge_weights,
+            train_bias=lora_train_bias,
         )
     elif mode == "full":
         # All parameters trainable

@@ -1,0 +1,37 @@
+# configs/lora_dropout_r8.yaml
+# LoRA fine-tuning config (rank=8, alpha=16) with dropout
+
+run_name:       "lora_dropout_r8_sst2"
+wandb_project:  "lora-replication"
+
+# Model
+model_name:     "roberta-base"
+mode:           "lora"
+
+# LoRA
+rank:           8
+alpha:          16
+lora_dropout:   0.05
+lora_init:      "microsoft"
+lora_merge_weights: true
+lora_train_bias: "none"
+target_modules:
+  - "query"
+  - "value"
+
+# LoRA+
+lora_plus:          false
+
+# Task
+task:           "sst2"
+num_labels:     2
+max_length:     128
+
+# Training
+epochs:         6
+batch_size:     32
+learning_rate:  5.0e-4
+weight_decay:   0.1
+warmup_ratio:   0.06
+gradient_accumulation_steps: 4
+seed: 0
