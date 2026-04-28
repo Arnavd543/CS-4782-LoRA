@@ -11,25 +11,24 @@ Usage:
 """
 
 import argparse
+import inspect
 import json
 import os
 import random
 import sys
-import time
 import yaml
 from pathlib import Path
 
 import numpy as np
 import torch
 import wandb
+from datasets import load_dataset
 from torch.optim import AdamW
-from transformers import get_linear_schedule_with_warmup
-from tqdm import tqdm
+from transformers import AutoTokenizer, DataCollatorWithPadding, Trainer, TrainingArguments
 
 sys.path.insert(0, os.path.dirname(__file__))
-from data import get_dataloaders
+from data import TASK_TO_KEYS, TASK_TO_NUM_LABELS
 from model import build_model
-from evaluate import evaluate, gpu_memory_mb
 from lora import count_parameters, lora_state_dict
 
 
@@ -62,17 +61,104 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def get_tokenized_datasets(cfg: dict):
+    task = cfg["task"]
+    if task not in TASK_TO_KEYS:
+        raise ValueError(f"Unsupported task '{task}'. Choose from {list(TASK_TO_KEYS)}")
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"])
+    raw = load_dataset("glue", task)
+    key1, key2 = TASK_TO_KEYS[task]
+
+    def tokenize(batch):
+        texts = (batch[key1],) if key2 is None else (batch[key1], batch[key2])
+        return tokenizer(*texts, truncation=True, max_length=cfg.get("max_length", 128))
+
+    tokenized = raw.map(tokenize, batched=True)
+    tokenized = tokenized.rename_column("label", "labels")
+
+    remove_cols = [
+        col for col in tokenized["train"].column_names
+        if col not in {"input_ids", "attention_mask", "labels"}
+    ]
+    tokenized = tokenized.remove_columns(remove_cols)
+
+    return tokenized, tokenizer, TASK_TO_NUM_LABELS[task]
+
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    preds = np.argmax(logits, axis=-1)
+    return {"accuracy": float((preds == labels).mean())}
+
+
+def build_training_args(cfg: dict, run_name: str) -> TrainingArguments:
+    kwargs = {
+        "output_dir": str(Path("checkpoints") / run_name),
+        "overwrite_output_dir": True,
+        "learning_rate": cfg["learning_rate"],
+        "per_device_train_batch_size": cfg["batch_size"],
+        "per_device_eval_batch_size": cfg.get("eval_batch_size", 64),
+        "num_train_epochs": cfg["epochs"],
+        "weight_decay": cfg.get("weight_decay", 0.01),
+        "warmup_ratio": cfg.get("warmup_ratio", 0.06),
+        "gradient_accumulation_steps": max(1, int(cfg.get("gradient_accumulation_steps", 1))),
+        "logging_steps": cfg.get("logging_steps", 50),
+        "save_strategy": "epoch",
+        "save_total_limit": 1,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "accuracy",
+        "greater_is_better": True,
+        "report_to": ["wandb"],
+        "run_name": run_name,
+        "fp16": bool(torch.cuda.is_available() and cfg.get("fp16", True)),
+        "seed": cfg.get("seed", 0),
+        "data_seed": cfg.get("seed", 0),
+    }
+
+    # Transformers renamed evaluation_strategy -> eval_strategy in newer versions.
+    if "eval_strategy" in inspect.signature(TrainingArguments.__init__).parameters:
+        kwargs["eval_strategy"] = "epoch"
+    else:
+        kwargs["evaluation_strategy"] = "epoch"
+
+    return TrainingArguments(**kwargs)
+
+
+def build_optimizer(model, cfg: dict):
+    no_decay = ["bias", "LayerNorm.weight"]
+    use_lora_plus = cfg.get("mode") == "lora" and cfg.get("lora_plus", False)
+    lr_default = cfg["learning_rate"]
+    lr_a = cfg.get("lora_plus_lr_A", lr_default) if use_lora_plus else lr_default
+    lr_b = lr_a * cfg.get("lora_plus_ratio", 16.0) if use_lora_plus else lr_default
+    weight_decay = cfg.get("weight_decay", 0.01)
+
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        lr = lr_b if use_lora_plus and "lora_B" in name else lr_a
+        wd = 0.0 if any(nd in name for nd in no_decay) else weight_decay
+        buckets[(lr, wd)].append(param)
+
+    groups = [
+        {"params": params, "lr": lr, "weight_decay": wd}
+        for (lr, wd), params in buckets.items()
+        if params
+    ]
+    return AdamW(groups, lr=lr_default)
+
+
 def train(cfg: dict):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[train] Device: {device}")
     set_seed(cfg.get("seed", 0))
 
-    # ── Data ──────────────────────────────────────────────────────────────────
-    train_loader, val_loader, num_labels = get_dataloaders(
-        task=cfg["task"],
-        model_name=cfg["model_name"],
-        max_length=cfg.get("max_length", 128),
-        batch_size=cfg["batch_size"],
+    tokenized, tokenizer, num_labels = get_tokenized_datasets(cfg)
+    print(
+        f"[data] Task={cfg['task']} | Train={len(tokenized['train']):,} "
+        f"| Val={len(tokenized['validation']):,} | Labels={num_labels}"
     )
 
     # ── Model ─────────────────────────────────────────────────────────────────
@@ -91,99 +177,34 @@ def train(cfg: dict):
 
     trainable, total = count_parameters(model)
 
-    # ── Optimizer & scheduler ─────────────────────────────────────────────────
-    NO_DECAY = ["bias", "LayerNorm.weight"]
-    use_lora_plus = cfg.get("mode") == "lora" and cfg.get("lora_plus", False)
-    lr_default = cfg["learning_rate"]
-    lr_A = cfg.get("lora_plus_lr_A", lr_default) if use_lora_plus else lr_default
-    lr_B = lr_A * cfg.get("lora_plus_ratio", 16.0) if use_lora_plus else lr_default
-    wd   = cfg.get("weight_decay", 0.01)
-
-    from collections import defaultdict
-    buckets = defaultdict(list)
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        param_wd = 0.0 if any(nd in name for nd in NO_DECAY) else wd
-        if use_lora_plus:
-            lr = lr_B if "lora_B" in name else lr_A
-        else:
-            lr = lr_default
-        buckets[(lr, param_wd)].append(param)
-
-    groups = [{"params": p, "lr": lr, "weight_decay": w}
-              for (lr, w), p in buckets.items() if p]
-    optimizer = AdamW(groups, lr=lr_default)
-
-    grad_accum = max(1, int(cfg.get("gradient_accumulation_steps", 1)))
-    updates_per_epoch = (len(train_loader) + grad_accum - 1) // grad_accum
-    total_steps = updates_per_epoch * cfg["epochs"]
-    warmup_steps = int(total_steps * cfg.get("warmup_ratio", 0.06))
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
-    )
-
-    # ── W&B ───────────────────────────────────────────────────────────────────
     run_name = cfg.get("run_name", f"{cfg['mode']}_r{cfg.get('rank','full')}")
-    wandb.init(
-        project=cfg.get("wandb_project", "lora-replication"),
-        name=run_name,
-        config={**cfg, "trainable_params": trainable, "total_params": total},
+    os.environ["WANDB_PROJECT"] = cfg.get("wandb_project", "lora-replication")
+    training_args = build_training_args(cfg, run_name)
+    optimizer = build_optimizer(model, cfg)
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized["train"],
+        eval_dataset=tokenized["validation"],
+        data_collator=DataCollatorWithPadding(tokenizer),
+        compute_metrics=compute_metrics,
+        optimizers=(optimizer, None),
     )
-    wandb.watch(model, log=None)
 
-    # ── Training loop ─────────────────────────────────────────────────────────
-    loss_fn = torch.nn.CrossEntropyLoss()
-    best_val_acc = 0.0
+    trainer.train()
+    metrics_eval = trainer.evaluate()
+    best_val_acc = float(
+        trainer.state.best_metric
+        if trainer.state.best_metric is not None
+        else metrics_eval.get("eval_accuracy", 0.0)
+    )
 
-    for epoch in range(1, cfg["epochs"] + 1):
-        model.train()
-        total_loss = 0.0
-        t0 = time.time()
-        optimizer.zero_grad(set_to_none=True)
-
-        for step, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch}", leave=False), start=1):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model(**batch)
-            loss = outputs.loss if outputs.loss is not None else loss_fn(
-                outputs.logits, batch["labels"]
-            )
-            total_loss += loss.item()
-
-            (loss / grad_accum).backward()
-
-            should_step = (step % grad_accum == 0) or (step == len(train_loader))
-            if should_step:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-
-        avg_loss = total_loss / len(train_loader)
-        val_acc = evaluate(model, val_loader, device)
-        mem_mb = gpu_memory_mb(device)
-        elapsed = time.time() - t0
-
-        print(f"Epoch {epoch:02d} | loss={avg_loss:.4f} | val_acc={val_acc:.4f} "
-              f"| gpu={mem_mb:.0f}MB | t={elapsed:.1f}s")
-
-        wandb.log({
-            "epoch": epoch,
-            "train_loss": avg_loss,
-            "val_accuracy": val_acc,
-            "gpu_memory_mb": mem_mb,
-            "trainable_params": trainable,
-            "trainable_pct": 100 * trainable / total,
-            "learning_rate": scheduler.get_last_lr()[0] if scheduler is not None else lr_default,
-        })
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            os.makedirs("checkpoints", exist_ok=True)
-            torch.save(
-                lora_state_dict(model) if cfg["mode"] == "lora" else model.state_dict(),
-                f"checkpoints/{run_name}_best.pt",
-            )
+    os.makedirs("checkpoints", exist_ok=True)
+    torch.save(
+        lora_state_dict(model) if cfg["mode"] == "lora" else model.state_dict(),
+        f"checkpoints/{run_name}_best.pt",
+    )
 
     print(f"\nBest val accuracy: {best_val_acc:.4f}")
     target_acc = cfg.get("target_accuracy", None)
@@ -213,7 +234,7 @@ def train(cfg: dict):
         "learning_rate": cfg["learning_rate"],
         "weight_decay": cfg.get("weight_decay", 0.0),
         "warmup_ratio": cfg.get("warmup_ratio", 0.0),
-        "gradient_accumulation_steps": grad_accum,
+        "gradient_accumulation_steps": max(1, int(cfg.get("gradient_accumulation_steps", 1))),
         "seed": cfg.get("seed", 0),
     }
     with open(logs_dir / f"{run_name}.json", "w") as f:
