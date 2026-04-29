@@ -64,7 +64,6 @@ def get_dataloaders(
     cols_to_remove = [c for c in raw["train"].column_names if c != "label"]
     tokenized = raw.map(tokenize, batched=True, remove_columns=cols_to_remove)
 
-    # SST-2 validation split is called 'validation'; keep label column
     tokenized = tokenized.rename_column("label", "labels")
     tokenized.set_format("torch")
 

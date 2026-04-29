@@ -166,14 +166,12 @@ def main():
     print("[analyze] Processing logs...")
     baseline_lora_key = "baseline_lora_r8_paper"
 
-    # --- Baseline ---
     if "baseline_full_ft" in logs and baseline_lora_key in logs:
         baseline_rows = [logs["baseline_full_ft"], logs[baseline_lora_key]]
         save_csv(BASELINE_DIR / "baseline.csv", baseline_rows, fields)
         plot_baseline_comparison(logs["baseline_full_ft"], logs[baseline_lora_key], BASELINE_DIR / "figures" / "baseline_comparison.png")
         plot_param_efficiency(logs["baseline_full_ft"], logs[baseline_lora_key], BASELINE_DIR / "figures" / "param_efficiency.png")
 
-    # --- Rank Sweep ---
     rank_runs = [v for k, v in logs.items() if k.startswith("lora_rank_")]
     if rank_runs and "baseline_full_ft" in logs:
         rank_runs = sorted(rank_runs, key=lambda x: x["rank"])
@@ -181,7 +179,6 @@ def main():
         save_csv(RANK_SWEEP_DIR / "rank_sweep.csv", rank_rows, fields)
         plot_rank_sweep(rank_rows, RANK_SWEEP_DIR / "figures" / "rank_sweep_accuracy.png")
 
-    # --- Module Comparison ---
     module_runs = []
     combo_names = {
         "query": "Wq", "key": "Wk", "value": "Wv", "query,value": "Q+V", "query,key,value": "QKV",
@@ -198,7 +195,6 @@ def main():
         save_csv(MODULE_CMP_DIR / "module_comparison.csv", module_rows, fields + ["combo_name"])
         plot_module_comparison(module_rows, MODULE_CMP_DIR / "figures" / "module_comparison_accuracy.png")
 
-    # --- Extensions ---
     ext_keys = ["lora_plus_r8", "lora_dropout_r8", "lora_plus_dropout_r8"]
     ext_runs = []
     for k in ext_keys:

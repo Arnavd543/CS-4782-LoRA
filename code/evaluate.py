@@ -73,8 +73,6 @@ def print_param_report(model) -> None:
     print(f"  {'TRAINABLE':<58} {trainable:>10,}  ({100*trainable/total:.4f}%)\n")
 
 
-# ── Standalone evaluation script ──────────────────────────────────────────────
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)

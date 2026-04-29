@@ -93,6 +93,7 @@ def compute_metrics(eval_pred):
 
 
 def build_training_args(cfg: dict, run_name: str) -> TrainingArguments:
+    params = inspect.signature(TrainingArguments.__init__).parameters
     kwargs = {
         "output_dir": str(Path("checkpoints") / run_name),
         "overwrite_output_dir": True,
@@ -116,13 +117,17 @@ def build_training_args(cfg: dict, run_name: str) -> TrainingArguments:
         "data_seed": cfg.get("seed", 0),
     }
 
-    # Transformers renamed evaluation_strategy -> eval_strategy in newer versions.
-    if "eval_strategy" in inspect.signature(TrainingArguments.__init__).parameters:
+    if "eval_strategy" in params:
         kwargs["eval_strategy"] = "epoch"
-    else:
+    elif "evaluation_strategy" in params:
         kwargs["evaluation_strategy"] = "epoch"
 
-    return TrainingArguments(**kwargs)
+    supported_kwargs = {k: v for k, v in kwargs.items() if k in params}
+    ignored_kwargs = sorted(set(kwargs) - set(supported_kwargs))
+    if ignored_kwargs:
+        print(f"[train] Ignoring unsupported TrainingArguments: {ignored_kwargs}")
+
+    return TrainingArguments(**supported_kwargs)
 
 
 def build_optimizer(model, cfg: dict):
@@ -161,7 +166,6 @@ def train(cfg: dict):
         f"| Val={len(tokenized['validation']):,} | Labels={num_labels}"
     )
 
-    # ── Model ─────────────────────────────────────────────────────────────────
     model = build_model(
         num_labels=num_labels,
         model_name=cfg["model_name"],
@@ -215,7 +219,6 @@ def train(cfg: dict):
     wandb.summary["best_val_accuracy"] = best_val_acc
     wandb.finish()
 
-    # Save metrics to JSON for analysis script
     repo_root = Path(__file__).resolve().parents[1]
     logs_dir = repo_root / "results" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
