@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 import os
@@ -7,37 +8,26 @@ from typing import Any, Dict, List, Tuple
 import matplotlib.pyplot as plt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RESULTS_DIR = REPO_ROOT / "results"
-LOGS_DIR = RESULTS_DIR / "logs"
-TOP_FIGURES_DIR = RESULTS_DIR / "figures"
-
-BASELINE_DIR = RESULTS_DIR / "baseline"
-RANK_SWEEP_DIR = RESULTS_DIR / "rank_sweep"
-MODULE_CMP_DIR = RESULTS_DIR / "module_comparison"
-EXTENSIONS_DIR = RESULTS_DIR / "extensions"
-MRPC_DIR = RESULTS_DIR / "mrpc"
+DEFAULT_RESULTS_DIR = REPO_ROOT / "results"
 
 
-def ensure_dirs():
-    for path in [
-        BASELINE_DIR,
-        RANK_SWEEP_DIR,
-        MODULE_CMP_DIR,
-        EXTENSIONS_DIR,
-        MRPC_DIR,
-        TOP_FIGURES_DIR,
-    ]:
+def ensure_dirs(dirs: Dict[str, Path]):
+    topFigures = dirs["top_figures"]
+    for key, path in dirs.items():
+        if key in ("top_figures", "logs"):
+            path.mkdir(parents=True, exist_ok=True)
+            continue
         path.mkdir(parents=True, exist_ok=True)
-        if path != TOP_FIGURES_DIR:
+        if path != topFigures:
             (path / "figures").mkdir(exist_ok=True)
 
 
-def load_logs() -> Dict[str, Dict[str, Any]]:
+def load_logs(logsDir: Path) -> Dict[str, Dict[str, Any]]:
     logs = {}
-    if not LOGS_DIR.exists():
-        print("No logs directory found at " + str(LOGS_DIR))
+    if not logsDir.exists():
+        print("No logs directory found at " + str(logsDir))
         return logs
-    for p in LOGS_DIR.glob("*.json"):
+    for p in logsDir.glob("*.json"):
         with open(p, "r") as f:
             data = json.load(f)
             logs[data["run_name"]] = data
@@ -316,8 +306,36 @@ def plot_combined_accuracy(allRows: List[Tuple[str, Dict[str, Any]]], path: Path
 
 
 def main():
-    ensure_dirs()
-    logs = load_logs()
+    parser = argparse.ArgumentParser(description="Aggregate per-run JSON logs into CSVs and figures.")
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        default=str(DEFAULT_RESULTS_DIR),
+        help="Root results directory containing logs/ and per-experiment subdirs.",
+    )
+    args = parser.parse_args()
+
+    resultsDir = Path(args.results_dir)
+    dirs = {
+        "results": resultsDir,
+        "logs": resultsDir / "logs",
+        "top_figures": resultsDir / "figures",
+        "baseline": resultsDir / "baseline",
+        "rank_sweep": resultsDir / "rank_sweep",
+        "module_comparison": resultsDir / "module_comparison",
+        "extensions": resultsDir / "extensions",
+        "mrpc": resultsDir / "mrpc",
+    }
+    LOGS_DIR = dirs["logs"]
+    TOP_FIGURES_DIR = dirs["top_figures"]
+    BASELINE_DIR = dirs["baseline"]
+    RANK_SWEEP_DIR = dirs["rank_sweep"]
+    MODULE_CMP_DIR = dirs["module_comparison"]
+    EXTENSIONS_DIR = dirs["extensions"]
+    MRPC_DIR = dirs["mrpc"]
+
+    ensure_dirs(dirs)
+    logs = load_logs(LOGS_DIR)
 
     fields = [
         "run_name", "task", "mode", "target_modules", "rank", "alpha",

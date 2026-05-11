@@ -41,6 +41,8 @@ def parse_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None, help="Override grad accumulation")
     parser.add_argument("--seed", type=int, default=None, help="Override random seed")
     parser.add_argument("--task", type=str, default=None, choices=["sst2", "mrpc"], help="Override task")
+    parser.add_argument("--checkpoints_dir", type=str, default=None, help="Directory for *_best.pt and Trainer outputs")
+    parser.add_argument("--results_dir", type=str, default=None, help="Root results dir; logs/ subdir is used")
     return parser.parse_args()
 
 
@@ -88,10 +90,10 @@ def compute_metrics(evalPred):
     return {"accuracy": float((preds == labels).mean())}
 
 
-def build_training_args(cfg: dict, runName: str) -> TrainingArguments:
+def build_training_args(cfg: dict, runName: str, checkpointsDir: Path) -> TrainingArguments:
     params = inspect.signature(TrainingArguments.__init__).parameters
     kwargs = {
-        "output_dir": str(Path("checkpoints") / runName),
+        "output_dir": str(checkpointsDir / runName),
         "overwrite_output_dir": True,
         "learning_rate": cfg["learning_rate"],
         "per_device_train_batch_size": cfg["batch_size"],
@@ -156,6 +158,15 @@ def train(cfg: dict):
     print("[train] Device: " + str(device))
     set_seed(cfg.get("seed", 0))
 
+    repoRoot = Path(__file__).resolve().parents[1]
+    checkpointsDir = Path(cfg.get("checkpoints_dir") or (repoRoot / "checkpoints"))
+    resultsDir = Path(cfg.get("results_dir") or (repoRoot / "results"))
+    checkpointsDir.mkdir(parents=True, exist_ok=True)
+    logsDir = resultsDir / "logs"
+    logsDir.mkdir(parents=True, exist_ok=True)
+    print("[train] checkpoints_dir = " + str(checkpointsDir))
+    print("[train] results_dir     = " + str(resultsDir))
+
     tokenized, tokenizer, numLabels = get_tokenized_datasets(cfg)
     print(
         "[data] Task=" + str(cfg["task"]) + " | Train=" + format(len(tokenized["train"]), ",") +
@@ -179,7 +190,7 @@ def train(cfg: dict):
 
     runName = cfg.get("run_name", cfg["mode"] + "_r" + str(cfg.get("rank", "full")))
     os.environ["WANDB_PROJECT"] = cfg.get("wandb_project", "lora-replication")
-    trainingArgs = build_training_args(cfg, runName)
+    trainingArgs = build_training_args(cfg, runName, checkpointsDir)
     optimizer = build_optimizer(model, cfg)
 
     trainer = Trainer(
@@ -208,10 +219,9 @@ def train(cfg: dict):
         else metricsEval.get("eval_accuracy", 0.0)
     )
 
-    os.makedirs("checkpoints", exist_ok=True)
     torch.save(
         lora_state_dict(model) if cfg["mode"] == "lora" else model.state_dict(),
-        "checkpoints/" + runName + "_best.pt",
+        str(checkpointsDir / (runName + "_best.pt")),
     )
 
     print("\nBest val accuracy: " + format(bestValAcc, ".4f"))
@@ -223,10 +233,6 @@ def train(cfg: dict):
         )
     wandb.summary["best_val_accuracy"] = bestValAcc
     wandb.finish()
-
-    repoRoot = Path(__file__).resolve().parents[1]
-    logsDir = repoRoot / "results" / "logs"
-    logsDir.mkdir(parents=True, exist_ok=True)
 
     metrics = {
         "run_name": runName,
@@ -279,5 +285,9 @@ if __name__ == "__main__":
     if args.task is not None:
         cfg["task"] = args.task
         cfg["num_labels"] = 2
+    if args.checkpoints_dir is not None:
+        cfg["checkpoints_dir"] = args.checkpoints_dir
+    if args.results_dir is not None:
+        cfg["results_dir"] = args.results_dir
 
     train(cfg)

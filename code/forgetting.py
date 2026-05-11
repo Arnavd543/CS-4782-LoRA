@@ -17,10 +17,8 @@ from lora import inject_lora
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINTS_DIR = REPO_ROOT / "checkpoints"
-RESULTS_DIR = REPO_ROOT / "results"
-FORGETTING_DIR = RESULTS_DIR / "forgetting"
-FIGURES_DIR = FORGETTING_DIR / "figures"
+DEFAULT_CHECKPOINTS_DIR = REPO_ROOT / "checkpoints"
+DEFAULT_RESULTS_DIR = REPO_ROOT / "results"
 
 
 def load_full_ft_backbone(checkpointPath: Path, mlmModel: RobertaForMaskedLM) -> RobertaForMaskedLM:
@@ -116,22 +114,23 @@ def build_variant(
     variant: str,
     baseModelName: str,
     device: torch.device,
+    checkpointsDir: Path,
 ) -> RobertaForMaskedLM:
     model = RobertaForMaskedLM.from_pretrained(baseModelName)
 
     if variant == "pretrained":
         pass
     elif variant == "full_ft":
-        ckpt = CHECKPOINTS_DIR / "baseline_full_ft_best.pt"
+        ckpt = checkpointsDir / "baseline_full_ft_best.pt"
         if not ckpt.exists():
             raise FileNotFoundError(f"Missing checkpoint: {ckpt}")
         model = load_full_ft_backbone(ckpt, model)
     elif variant.startswith("lora_r"):
         rank = int(variant.split("_r")[1])
-        ckpt = CHECKPOINTS_DIR / ("lora_rank_" + str(rank) + "_best.pt")
+        ckpt = checkpointsDir / ("lora_rank_" + str(rank) + "_best.pt")
         if not ckpt.exists():
             if rank == 8:
-                alt = CHECKPOINTS_DIR / "baseline_lora_r8_paper_best.pt"
+                alt = checkpointsDir / "baseline_lora_r8_paper_best.pt"
                 if alt.exists():
                     ckpt = alt
             if not ckpt.exists():
@@ -196,10 +195,26 @@ def main():
         default="pretrained,full_ft,lora_r1,lora_r8,lora_r32",
         help="Comma-separated variant names.",
     )
+    parser.add_argument(
+        "--checkpoints_dir",
+        type=str,
+        default=str(DEFAULT_CHECKPOINTS_DIR),
+        help="Directory containing *_best.pt checkpoints.",
+    )
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        default=str(DEFAULT_RESULTS_DIR),
+        help="Root results directory; forgetting/ subdir will be created inside.",
+    )
     args = parser.parse_args()
 
-    FORGETTING_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    checkpointsDir = Path(args.checkpoints_dir)
+    resultsDir = Path(args.results_dir)
+    forgettingDir = resultsDir / "forgetting"
+    figuresDir = forgettingDir / "figures"
+    forgettingDir.mkdir(parents=True, exist_ok=True)
+    figuresDir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("[forgetting] Device: " + str(device))
@@ -219,7 +234,7 @@ def main():
     for variant in variants:
         print("\n[forgetting] === " + variant + " ===")
         try:
-            model = build_variant(variant, args.base_model, device)
+            model = build_variant(variant, args.base_model, device, checkpointsDir)
         except FileNotFoundError as e:
             print("  SKIPPED: " + str(e))
             continue
@@ -254,11 +269,11 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    save_csv(FORGETTING_DIR / "perplexity.csv", rows)
-    plot_perplexity(rows, FIGURES_DIR / "perplexity_comparison.png")
+    save_csv(forgettingDir / "perplexity.csv", rows)
+    plot_perplexity(rows, figuresDir / "perplexity_comparison.png")
 
-    print("\n[forgetting] Saved " + str(FORGETTING_DIR / "perplexity.csv"))
-    print("[forgetting] Saved " + str(FIGURES_DIR / "perplexity_comparison.png"))
+    print("\n[forgetting] Saved " + str(forgettingDir / "perplexity.csv"))
+    print("[forgetting] Saved " + str(figuresDir / "perplexity_comparison.png"))
 
 
 if __name__ == "__main__":
