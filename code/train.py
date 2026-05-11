@@ -16,6 +16,7 @@ import json
 import os
 import random
 import sys
+import time
 import yaml
 from pathlib import Path
 
@@ -45,6 +46,7 @@ def parse_args():
     parser.add_argument("--lora_init", type=str, default=None, choices=["microsoft", "paper"], help="LoRA init style")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None, help="Override grad accumulation")
     parser.add_argument("--seed", type=int, default=None, help="Override random seed")
+    parser.add_argument("--task", type=str, default=None, choices=["sst2", "mrpc"], help="Override task")
     return parser.parse_args()
 
 
@@ -196,7 +198,15 @@ def train(cfg: dict):
         optimizers=(optimizer, None),
     )
 
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    t0 = time.time()
     trainer.train()
+    elapsed_sec = time.time() - t0
+    gpu_memory_mb = (
+        torch.cuda.max_memory_allocated() / (1024 ** 2)
+        if torch.cuda.is_available() else 0.0
+    )
     metrics_eval = trainer.evaluate()
     best_val_acc = float(
         trainer.state.best_metric
@@ -225,6 +235,7 @@ def train(cfg: dict):
     
     metrics = {
         "run_name": run_name,
+        "task": cfg["task"],
         "mode": cfg["mode"],
         "target_modules": ",".join(cfg.get("target_modules", [])),
         "rank": cfg.get("rank", None),
@@ -239,6 +250,9 @@ def train(cfg: dict):
         "warmup_ratio": cfg.get("warmup_ratio", 0.0),
         "gradient_accumulation_steps": max(1, int(cfg.get("gradient_accumulation_steps", 1))),
         "seed": cfg.get("seed", 0),
+        "elapsed_sec": elapsed_sec,
+        "gpu_memory_mb": gpu_memory_mb,
+        "log_history": trainer.state.log_history,
     }
     with open(logs_dir / f"{run_name}.json", "w") as f:
         json.dump(metrics, f, indent=2)
@@ -267,5 +281,8 @@ if __name__ == "__main__":
         cfg["gradient_accumulation_steps"] = args.gradient_accumulation_steps
     if args.seed is not None:
         cfg["seed"] = args.seed
-    
+    if args.task is not None:
+        cfg["task"] = args.task
+        cfg["num_labels"] = 2  # both supported tasks are 2-class
+
     train(cfg)

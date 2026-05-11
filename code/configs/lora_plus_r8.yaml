@@ -30,7 +30,7 @@ num_labels:     2
 max_length:     128
 
 # Training
-epochs:         6
+epochs:         10
 batch_size:     32
 learning_rate:  2.5e-4
 weight_decay:   0.1
