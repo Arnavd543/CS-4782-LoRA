@@ -1,19 +1,4 @@
-"""
-forgetting.py
--------------
-"LoRA learns less, forgets less" — rigorous MLM perplexity test.
-
-For each fine-tuned variant, we evaluate masked-language-modeling perplexity
-on a held-out wikitext-2 sample using the pretrained MLM head. The intuition:
-fine-tuning on SST-2 drifts the backbone away from pretraining; LoRA's
-rank-bounded delta drifts less than full fine-tuning, so its perplexity stays
-closer to the pretrained baseline.
-
-Variants:
-  - pretrained           (reference)
-  - full_ft              (SST-2 full fine-tune)
-  - lora_r1 / r8 / r32   (SST-2 LoRA rank sweep)
-"""
+"""MLM perplexity drift after SST-2 fine-tuning (LoRA vs full FT)."""
 
 import argparse
 import csv
@@ -39,9 +24,6 @@ FIGURES_DIR = FORGETTING_DIR / "figures"
 
 
 def load_full_ft_backbone(checkpoint_path: Path, mlm_model: RobertaForMaskedLM) -> RobertaForMaskedLM:
-    """Copy only `roberta.*` backbone weights from a full-FT classification
-    checkpoint into the MLM model. Classifier keys (classifier.*) are ignored
-    via strict=False since the MLM model uses lm_head.* instead."""
     state = torch.load(checkpoint_path, map_location="cpu")
     backbone_state = {k: v for k, v in state.items() if k.startswith("roberta.")}
     missing, unexpected = mlm_model.load_state_dict(backbone_state, strict=False)
@@ -57,8 +39,6 @@ def load_lora_backbone(
     alpha: float = 8.0,
     target_modules: Optional[List[str]] = None,
 ) -> RobertaForMaskedLM:
-    """Inject LoRA into the MLM model's attention query/value layers, then load
-    the saved lora_A/lora_B weights from a LoRA checkpoint."""
     if target_modules is None:
         target_modules = ["query", "value"]
     inject_lora(
@@ -89,9 +69,6 @@ def compute_perplexity(
     max_length: int = 256,
     seed: int = 0,
 ) -> float:
-    """Standard masked-LM perplexity. We mask `mask_prob` of tokens, set the
-    rest to -100 so they don't contribute to the loss, and sum loss over masked
-    tokens only. Perplexity = exp(loss / num_masked)."""
     model.eval()
     g = torch.Generator(device="cpu").manual_seed(seed)
 
@@ -109,7 +86,6 @@ def compute_perplexity(
         attention_mask = inputs["attention_mask"].to(device)
         labels = input_ids.clone()
 
-        # Mask `mask_prob` of non-special tokens
         special_tokens_mask = tokenizer.get_special_tokens_mask(
             input_ids[0].tolist(), already_has_special_tokens=True
         )
@@ -141,11 +117,10 @@ def build_variant(
     base_model_name: str,
     device: torch.device,
 ) -> RobertaForMaskedLM:
-    """Construct an MLM model for the given variant."""
     model = RobertaForMaskedLM.from_pretrained(base_model_name)
 
     if variant == "pretrained":
-        pass  # use as-is
+        pass
     elif variant == "full_ft":
         ckpt = CHECKPOINTS_DIR / "baseline_full_ft_best.pt"
         if not ckpt.exists():
@@ -153,10 +128,8 @@ def build_variant(
         model = load_full_ft_backbone(ckpt, model)
     elif variant.startswith("lora_r"):
         rank = int(variant.split("_r")[1])
-        # The notebook saves rank-sweep checkpoints as lora_rank_{r}_best.pt
         ckpt = CHECKPOINTS_DIR / f"lora_rank_{rank}_best.pt"
         if not ckpt.exists():
-            # Fall back to baseline LoRA r=8 if rank=8 sweep checkpoint missing
             if rank == 8:
                 alt = CHECKPOINTS_DIR / "baseline_lora_r8_paper_best.pt"
                 if alt.exists():
@@ -182,7 +155,6 @@ def save_csv(path: Path, rows: List[Dict]):
 
 
 def plot_perplexity(rows: List[Dict], path: Path):
-    """Bar chart with pretrained as the leftmost (reference) bar."""
     if not rows:
         return
     labels = [r["variant"] for r in rows]
@@ -200,7 +172,6 @@ def plot_perplexity(rows: List[Dict], path: Path):
             f"{p:.2f}",
             ha="center", va="bottom", fontsize=9,
         )
-    # Reference line at pretrained perplexity
     pre_ppl = rows[0]["perplexity"]
     plt.axhline(pre_ppl, color="tab:gray", linestyle="--", alpha=0.5, label="pretrained")
     plt.legend()

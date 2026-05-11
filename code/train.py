@@ -283,6 +283,6 @@ if __name__ == "__main__":
         cfg["seed"] = args.seed
     if args.task is not None:
         cfg["task"] = args.task
-        cfg["num_labels"] = 2  # both supported tasks are 2-class
+        cfg["num_labels"] = 2
 
     train(cfg)

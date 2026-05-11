@@ -54,8 +54,6 @@ def save_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]):
             writer.writerow(row)
 
 
-# ── Per-experiment plots ───────────────────────────────────────────────────────
-
 def plot_baseline_comparison(full_ft: Dict[str, Any], lora_r8: Dict[str, Any], path: Path):
     labels = ["Full Fine-Tuning", "LoRA (r=8)"]
     accs = [full_ft["val_accuracy"], lora_r8["val_accuracy"]]
@@ -173,10 +171,7 @@ def plot_module_comparison(rows: List[Dict[str, Any]], path: Path):
     plt.close()
 
 
-# ── New plots (Step 5) ─────────────────────────────────────────────────────────
-
 def _extract_epoch_accuracy_series(log_history: List[Dict[str, Any]]) -> Tuple[List[float], List[float]]:
-    """Pull (epoch, eval_accuracy) pairs from a Trainer log_history."""
     epochs, accs = [], []
     for entry in log_history or []:
         if "eval_accuracy" in entry and "epoch" in entry:
@@ -186,7 +181,6 @@ def _extract_epoch_accuracy_series(log_history: List[Dict[str, Any]]) -> Tuple[L
 
 
 def plot_convergence_curves(runs: List[Dict[str, Any]], labels: List[str], path: Path, title: str):
-    """One line per run; X=epoch, Y=val_accuracy."""
     if not runs:
         return
     plt.figure(figsize=(8, 5))
@@ -249,8 +243,6 @@ def plot_memory_comparison(rows: List[Dict[str, Any]], path: Path, title: str = 
 
 
 def plot_time_vs_accuracy(all_rows: List[Tuple[str, Dict[str, Any]]], path: Path):
-    """Scatter of elapsed_sec vs val_accuracy across all runs.
-    all_rows: list of (family, log_dict) tuples."""
     if not all_rows:
         return
     families = sorted({family for family, _ in all_rows})
@@ -272,7 +264,6 @@ def plot_time_vs_accuracy(all_rows: List[Tuple[str, Dict[str, Any]]], path: Path
 
 
 def plot_param_efficiency_scatter(all_rows: List[Tuple[str, Dict[str, Any]]], path: Path):
-    """Trainable params (log x) vs val_accuracy, color by experiment family."""
     if not all_rows:
         return
     families = sorted({family for family, _ in all_rows})
@@ -295,13 +286,11 @@ def plot_param_efficiency_scatter(all_rows: List[Tuple[str, Dict[str, Any]]], pa
 
 
 def plot_combined_accuracy(all_rows: List[Tuple[str, Dict[str, Any]]], path: Path):
-    """Single horizontal bar chart of all runs grouped by family, color-coded."""
     if not all_rows:
         return
     families = sorted({family for family, _ in all_rows})
     colors = {f: c for f, c in zip(families, ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown"])}
 
-    # Sort within each family by accuracy descending
     grouped = []
     for fam in families:
         fam_rows = [(f, r) for f, r in all_rows if f == fam]
@@ -326,8 +315,6 @@ def plot_combined_accuracy(all_rows: List[Tuple[str, Dict[str, Any]]], path: Pat
     plt.close()
 
 
-# ── Driver ─────────────────────────────────────────────────────────────────────
-
 def main():
     ensure_dirs()
     logs = load_logs()
@@ -341,7 +328,6 @@ def main():
     print("[analyze] Processing logs...")
     baseline_lora_key = "baseline_lora_r8_paper"
 
-    # ── SST-2 baselines ────────────────────────────────────────────────────────
     sst2_logs = {k: v for k, v in logs.items() if v.get("task", "sst2") == "sst2"}
 
     if "baseline_full_ft" in sst2_logs and baseline_lora_key in sst2_logs:
@@ -372,7 +358,6 @@ def main():
             "Peak GPU memory: Full FT vs LoRA r=8",
         )
 
-    # ── Rank sweep ─────────────────────────────────────────────────────────────
     rank_runs = sorted(
         [v for k, v in sst2_logs.items() if k.startswith("lora_rank_")],
         key=lambda x: x["rank"],
@@ -382,7 +367,6 @@ def main():
         save_csv(RANK_SWEEP_DIR / "rank_sweep.csv", rank_rows, fields)
         plot_rank_sweep(rank_rows, RANK_SWEEP_DIR / "figures" / "rank_sweep_accuracy.png")
 
-    # ── Module comparison ──────────────────────────────────────────────────────
     combo_names = {
         "query": "Wq", "key": "Wk", "value": "Wv",
         "query,value": "Q+V", "query,key,value": "QKV",
@@ -406,7 +390,6 @@ def main():
             "Training time by target module",
         )
 
-    # ── Extensions ─────────────────────────────────────────────────────────────
     ext_keys = ["lora_plus_r8", "lora_dropout_r8", "lora_plus_dropout_r8"]
     ext_runs = []
     for k in ext_keys:
@@ -439,7 +422,6 @@ def main():
             "Training time by extension variant",
         )
 
-    # ── MRPC ───────────────────────────────────────────────────────────────────
     mrpc_logs = {k: v for k, v in logs.items() if v.get("task") == "mrpc"}
     if "mrpc_full_ft" in mrpc_logs and "mrpc_lora_r8" in mrpc_logs:
         mrpc_rows = [mrpc_logs["mrpc_full_ft"], mrpc_logs["mrpc_lora_r8"]]
@@ -455,7 +437,6 @@ def main():
             MRPC_DIR / "figures" / "param_efficiency.png",
         )
 
-    # ── Top-level cross-experiment plots ───────────────────────────────────────
     all_rows: List[Tuple[str, Dict[str, Any]]] = []
     if "baseline_full_ft" in sst2_logs:
         all_rows.append(("baseline", sst2_logs["baseline_full_ft"]))
