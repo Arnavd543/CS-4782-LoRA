@@ -1,4 +1,4 @@
-"""MLM perplexity drift after SST-2 fine-tuning (LoRA vs full FT)."""
+# MLM perplexity drift after SST-2 fine-tuning (LoRA vs full FT).
 
 import argparse
 import csv
@@ -23,40 +23,40 @@ FORGETTING_DIR = RESULTS_DIR / "forgetting"
 FIGURES_DIR = FORGETTING_DIR / "figures"
 
 
-def load_full_ft_backbone(checkpoint_path: Path, mlm_model: RobertaForMaskedLM) -> RobertaForMaskedLM:
-    state = torch.load(checkpoint_path, map_location="cpu")
-    backbone_state = {k: v for k, v in state.items() if k.startswith("roberta.")}
-    missing, unexpected = mlm_model.load_state_dict(backbone_state, strict=False)
-    print(f"  [full_ft] loaded {len(backbone_state)} backbone keys "
-          f"(missing={len(missing)} unexpected={len(unexpected)})")
-    return mlm_model
+def load_full_ft_backbone(checkpointPath: Path, mlmModel: RobertaForMaskedLM) -> RobertaForMaskedLM:
+    state = torch.load(checkpointPath, map_location="cpu")
+    backboneState = {k: v for k, v in state.items() if k.startswith("roberta.")}
+    missing, unexpected = mlmModel.load_state_dict(backboneState, strict=False)
+    print("  [full_ft] loaded " + str(len(backboneState)) + " backbone keys "
+          "(missing=" + str(len(missing)) + " unexpected=" + str(len(unexpected)) + ")")
+    return mlmModel
 
 
 def load_lora_backbone(
-    checkpoint_path: Path,
-    mlm_model: RobertaForMaskedLM,
+    checkpointPath: Path,
+    mlmModel: RobertaForMaskedLM,
     rank: int,
     alpha: float = 8.0,
-    target_modules: Optional[List[str]] = None,
+    targetModules: Optional[List[str]] = None,
 ) -> RobertaForMaskedLM:
-    if target_modules is None:
-        target_modules = ["query", "value"]
+    if targetModules is None:
+        targetModules = ["query", "value"]
     inject_lora(
-        mlm_model,
+        mlmModel,
         rank=rank,
         alpha=alpha,
-        target_modules=target_modules,
-        init_method="paper",
-        merge_weights=True,
-        train_classifier=False,
-        train_pooler=False,
+        targetModules=targetModules,
+        initMethod="paper",
+        mergeWeights=True,
+        trainClassifier=False,
+        trainPooler=False,
     )
-    state = torch.load(checkpoint_path, map_location="cpu")
-    lora_state = {k: v for k, v in state.items() if "lora_" in k}
-    missing, unexpected = mlm_model.load_state_dict(lora_state, strict=False)
-    print(f"  [lora r={rank}] loaded {len(lora_state)} LoRA keys "
-          f"(missing={len(missing)} unexpected={len(unexpected)})")
-    return mlm_model
+    state = torch.load(checkpointPath, map_location="cpu")
+    loraState = {k: v for k, v in state.items() if "loraA" in k or "loraB" in k}
+    missing, unexpected = mlmModel.load_state_dict(loraState, strict=False)
+    print("  [lora r=" + str(rank) + "] loaded " + str(len(loraState)) + " LoRA keys "
+          "(missing=" + str(len(missing)) + " unexpected=" + str(len(unexpected)) + ")")
+    return mlmModel
 
 
 @torch.no_grad()
@@ -65,59 +65,59 @@ def compute_perplexity(
     tokenizer,
     texts: List[str],
     device: torch.device,
-    mask_prob: float = 0.15,
-    max_length: int = 256,
+    maskProb: float = 0.15,
+    maxLength: int = 256,
     seed: int = 0,
 ) -> float:
     model.eval()
     g = torch.Generator(device="cpu").manual_seed(seed)
 
-    total_loss = 0.0
-    total_masked = 0
+    totalLoss = 0.0
+    totalMasked = 0
 
     for text in texts:
         inputs = tokenizer(
             text,
             return_tensors="pt",
             truncation=True,
-            max_length=max_length,
+            max_length=maxLength,
         )
-        input_ids = inputs["input_ids"].to(device)
-        attention_mask = inputs["attention_mask"].to(device)
-        labels = input_ids.clone()
+        inputIds = inputs["input_ids"].to(device)
+        attentionMask = inputs["attention_mask"].to(device)
+        labels = inputIds.clone()
 
-        special_tokens_mask = tokenizer.get_special_tokens_mask(
-            input_ids[0].tolist(), already_has_special_tokens=True
+        specialTokensMask = tokenizer.get_special_tokens_mask(
+            inputIds[0].tolist(), already_has_special_tokens=True
         )
-        special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool, device=device).unsqueeze(0)
+        specialTokensMask = torch.tensor(specialTokensMask, dtype=torch.bool, device=device).unsqueeze(0)
 
-        prob_matrix = torch.full(labels.shape, mask_prob, device="cpu")
-        masked_indices_cpu = torch.bernoulli(prob_matrix, generator=g).bool()
-        masked_indices = masked_indices_cpu.to(device) & ~special_tokens_mask & attention_mask.bool()
+        probMatrix = torch.full(labels.shape, maskProb, device="cpu")
+        maskedIndicesCpu = torch.bernoulli(probMatrix, generator=g).bool()
+        maskedIndices = maskedIndicesCpu.to(device) & ~specialTokensMask & attentionMask.bool()
 
-        if masked_indices.sum() == 0:
+        if maskedIndices.sum() == 0:
             continue
 
-        labels[~masked_indices] = -100
-        masked_input_ids = input_ids.clone()
-        masked_input_ids[masked_indices] = tokenizer.mask_token_id
+        labels[~maskedIndices] = -100
+        maskedInputIds = inputIds.clone()
+        maskedInputIds[maskedIndices] = tokenizer.mask_token_id
 
-        outputs = model(input_ids=masked_input_ids, attention_mask=attention_mask, labels=labels)
-        n_masked = int(masked_indices.sum().item())
-        total_loss += float(outputs.loss.item()) * n_masked
-        total_masked += n_masked
+        outputs = model(input_ids=maskedInputIds, attention_mask=attentionMask, labels=labels)
+        nMasked = int(maskedIndices.sum().item())
+        totalLoss += float(outputs.loss.item()) * nMasked
+        totalMasked += nMasked
 
-    if total_masked == 0:
+    if totalMasked == 0:
         return float("nan")
-    return float(torch.exp(torch.tensor(total_loss / total_masked)).item())
+    return float(torch.exp(torch.tensor(totalLoss / totalMasked)).item())
 
 
 def build_variant(
     variant: str,
-    base_model_name: str,
+    baseModelName: str,
     device: torch.device,
 ) -> RobertaForMaskedLM:
-    model = RobertaForMaskedLM.from_pretrained(base_model_name)
+    model = RobertaForMaskedLM.from_pretrained(baseModelName)
 
     if variant == "pretrained":
         pass
@@ -128,7 +128,7 @@ def build_variant(
         model = load_full_ft_backbone(ckpt, model)
     elif variant.startswith("lora_r"):
         rank = int(variant.split("_r")[1])
-        ckpt = CHECKPOINTS_DIR / f"lora_rank_{rank}_best.pt"
+        ckpt = CHECKPOINTS_DIR / ("lora_rank_" + str(rank) + "_best.pt")
         if not ckpt.exists():
             if rank == 8:
                 alt = CHECKPOINTS_DIR / "baseline_lora_r8_paper_best.pt"
@@ -172,8 +172,8 @@ def plot_perplexity(rows: List[Dict], path: Path):
             f"{p:.2f}",
             ha="center", va="bottom", fontsize=9,
         )
-    pre_ppl = rows[0]["perplexity"]
-    plt.axhline(pre_ppl, color="tab:gray", linestyle="--", alpha=0.5, label="pretrained")
+    prePpl = rows[0]["perplexity"]
+    plt.axhline(prePpl, color="tab:gray", linestyle="--", alpha=0.5, label="pretrained")
     plt.legend()
     plt.tight_layout()
     plt.savefig(path)
@@ -199,26 +199,26 @@ def main():
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[forgetting] Device: {device}")
-    print(f"[forgetting] Loading wikitext-2 test split...")
+    print("[forgetting] Device: " + str(device))
+    print("[forgetting] Loading wikitext-2 test split...")
 
     ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-    raw_texts = [t for t in ds["text"] if len(t.strip()) > 50]
-    texts = raw_texts[: args.num_texts]
-    print(f"[forgetting] Evaluating on {len(texts)} texts.")
+    rawTexts = [t for t in ds["text"] if len(t.strip()) > 50]
+    texts = rawTexts[: args.num_texts]
+    print("[forgetting] Evaluating on " + str(len(texts)) + " texts.")
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
 
     rows: List[Dict] = []
-    pre_ppl = None
+    prePpl = None
 
     for variant in variants:
-        print(f"\n[forgetting] === {variant} ===")
+        print("\n[forgetting] === " + variant + " ===")
         try:
             model = build_variant(variant, args.base_model, device)
         except FileNotFoundError as e:
-            print(f"  SKIPPED: {e}")
+            print("  SKIPPED: " + str(e))
             continue
 
         ppl = compute_perplexity(
@@ -226,19 +226,19 @@ def main():
             tokenizer,
             texts,
             device,
-            mask_prob=args.mask_prob,
-            max_length=args.max_length,
+            maskProb=args.mask_prob,
+            maxLength=args.max_length,
             seed=args.seed,
         )
-        if pre_ppl is None and variant == "pretrained":
-            pre_ppl = ppl
+        if prePpl is None and variant == "pretrained":
+            prePpl = ppl
 
-        increase = (ppl - pre_ppl) if pre_ppl is not None else 0.0
-        pct = (100.0 * increase / pre_ppl) if pre_ppl else 0.0
+        increase = (ppl - prePpl) if prePpl is not None else 0.0
+        pct = (100.0 * increase / prePpl) if prePpl else 0.0
 
-        print(f"  perplexity = {ppl:.4f}")
-        if pre_ppl is not None:
-            print(f"  delta vs pretrained = +{increase:.4f} ({pct:+.2f}%)")
+        print("  perplexity = " + format(ppl, ".4f"))
+        if prePpl is not None:
+            print("  delta vs pretrained = +" + format(increase, ".4f") + " (" + format(pct, "+.2f") + "%)")
 
         rows.append({
             "variant": variant,
@@ -254,8 +254,8 @@ def main():
     save_csv(FORGETTING_DIR / "perplexity.csv", rows)
     plot_perplexity(rows, FIGURES_DIR / "perplexity_comparison.png")
 
-    print(f"\n[forgetting] Saved {FORGETTING_DIR / 'perplexity.csv'}")
-    print(f"[forgetting] Saved {FIGURES_DIR / 'perplexity_comparison.png'}")
+    print("\n[forgetting] Saved " + str(FORGETTING_DIR / "perplexity.csv"))
+    print("[forgetting] Saved " + str(FIGURES_DIR / "perplexity_comparison.png"))
 
 
 if __name__ == "__main__":

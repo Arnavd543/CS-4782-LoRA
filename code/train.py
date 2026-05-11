@@ -1,14 +1,8 @@
-"""
-train.py
---------
-Training loop supporting both full fine-tuning and LoRA fine-tuning.
-Logs metrics to Weights & Biases and prints GPU memory usage each epoch.
-
-Usage:
-    python train.py --config configs/lora_r8.yaml
-    python train.py --config configs/baseline.yaml
-    python train.py --config configs/lora_r8.yaml --rank 4 --run_name lora_r4
-"""
+# Training loop for full fine-tuning and LoRA fine-tuning.
+# Usage:
+#   python train.py --config configs/lora_r8.yaml
+#   python train.py --config configs/baseline.yaml
+#   python train.py --config configs/lora_r8.yaml --rank 4 --run_name lora_r4
 
 import argparse
 import inspect
@@ -79,25 +73,25 @@ def get_tokenized_datasets(cfg: dict):
     tokenized = raw.map(tokenize, batched=True)
     tokenized = tokenized.rename_column("label", "labels")
 
-    remove_cols = [
+    removeCols = [
         col for col in tokenized["train"].column_names
         if col not in {"input_ids", "attention_mask", "labels"}
     ]
-    tokenized = tokenized.remove_columns(remove_cols)
+    tokenized = tokenized.remove_columns(removeCols)
 
     return tokenized, tokenizer, TASK_TO_NUM_LABELS[task]
 
 
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
+def compute_metrics(evalPred):
+    logits, labels = evalPred
     preds = np.argmax(logits, axis=-1)
     return {"accuracy": float((preds == labels).mean())}
 
 
-def build_training_args(cfg: dict, run_name: str) -> TrainingArguments:
+def build_training_args(cfg: dict, runName: str) -> TrainingArguments:
     params = inspect.signature(TrainingArguments.__init__).parameters
     kwargs = {
-        "output_dir": str(Path("checkpoints") / run_name),
+        "output_dir": str(Path("checkpoints") / runName),
         "overwrite_output_dir": True,
         "learning_rate": cfg["learning_rate"],
         "per_device_train_batch_size": cfg["batch_size"],
@@ -113,7 +107,7 @@ def build_training_args(cfg: dict, run_name: str) -> TrainingArguments:
         "metric_for_best_model": "accuracy",
         "greater_is_better": True,
         "report_to": ["wandb"],
-        "run_name": run_name,
+        "run_name": runName,
         "fp16": bool(torch.cuda.is_available() and cfg.get("fp16", True)),
         "seed": cfg.get("seed", 0),
         "data_seed": cfg.get("seed", 0),
@@ -124,29 +118,29 @@ def build_training_args(cfg: dict, run_name: str) -> TrainingArguments:
     elif "evaluation_strategy" in params:
         kwargs["evaluation_strategy"] = "epoch"
 
-    supported_kwargs = {k: v for k, v in kwargs.items() if k in params}
-    ignored_kwargs = sorted(set(kwargs) - set(supported_kwargs))
-    if ignored_kwargs:
-        print(f"[train] Ignoring unsupported TrainingArguments: {ignored_kwargs}")
+    supportedKwargs = {k: v for k, v in kwargs.items() if k in params}
+    ignoredKwargs = sorted(set(kwargs) - set(supportedKwargs))
+    if ignoredKwargs:
+        print("[train] Ignoring unsupported TrainingArguments: " + str(ignoredKwargs))
 
-    return TrainingArguments(**supported_kwargs)
+    return TrainingArguments(**supportedKwargs)
 
 
 def build_optimizer(model, cfg: dict):
-    no_decay = ["bias", "LayerNorm.weight"]
-    use_lora_plus = cfg.get("mode") == "lora" and cfg.get("lora_plus", False)
-    lr_default = cfg["learning_rate"]
-    lr_a = cfg.get("lora_plus_lr_A", lr_default) if use_lora_plus else lr_default
-    lr_b = lr_a * cfg.get("lora_plus_ratio", 16.0) if use_lora_plus else lr_default
-    weight_decay = cfg.get("weight_decay", 0.01)
+    noDecay = ["bias", "LayerNorm.weight"]
+    useLoraPlus = cfg.get("mode") == "lora" and cfg.get("lora_plus", False)
+    lrDefault = cfg["learning_rate"]
+    lrA = cfg.get("lora_plus_lr_A", lrDefault) if useLoraPlus else lrDefault
+    lrB = lrA * cfg.get("lora_plus_ratio", 16.0) if useLoraPlus else lrDefault
+    weightDecay = cfg.get("weight_decay", 0.01)
 
     from collections import defaultdict
     buckets = defaultdict(list)
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        lr = lr_b if use_lora_plus and "lora_B" in name else lr_a
-        wd = 0.0 if any(nd in name for nd in no_decay) else weight_decay
+        lr = lrB if useLoraPlus and "loraB" in name else lrA
+        wd = 0.0 if any(nd in name for nd in noDecay) else weightDecay
         buckets[(lr, wd)].append(param)
 
     groups = [
@@ -154,43 +148,43 @@ def build_optimizer(model, cfg: dict):
         for (lr, wd), params in buckets.items()
         if params
     ]
-    return AdamW(groups, lr=lr_default)
+    return AdamW(groups, lr=lrDefault)
 
 
 def train(cfg: dict):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[train] Device: {device}")
+    print("[train] Device: " + str(device))
     set_seed(cfg.get("seed", 0))
 
-    tokenized, tokenizer, num_labels = get_tokenized_datasets(cfg)
+    tokenized, tokenizer, numLabels = get_tokenized_datasets(cfg)
     print(
-        f"[data] Task={cfg['task']} | Train={len(tokenized['train']):,} "
-        f"| Val={len(tokenized['validation']):,} | Labels={num_labels}"
+        "[data] Task=" + str(cfg["task"]) + " | Train=" + format(len(tokenized["train"]), ",") +
+        " | Val=" + format(len(tokenized["validation"]), ",") + " | Labels=" + str(numLabels)
     )
 
     model = build_model(
-        num_labels=num_labels,
-        model_name=cfg["model_name"],
+        numLabels=numLabels,
+        modelName=cfg["model_name"],
         mode=cfg["mode"],
         rank=cfg.get("rank", 8),
         alpha=cfg.get("alpha", 8.0),
         dropout=cfg.get("lora_dropout", 0.0),
-        target_modules=cfg.get("target_modules", ["query", "value"]),
-        lora_init=cfg.get("lora_init", "paper"),
-        lora_merge_weights=cfg.get("lora_merge_weights", True),
-        lora_train_bias=cfg.get("lora_train_bias", "none"),
+        targetModules=cfg.get("target_modules", ["query", "value"]),
+        loraInit=cfg.get("lora_init", "paper"),
+        loraMergeWeights=cfg.get("lora_merge_weights", True),
+        loraTrainBias=cfg.get("lora_train_bias", "none"),
     ).to(device)
 
     trainable, total = count_parameters(model)
 
-    run_name = cfg.get("run_name", f"{cfg['mode']}_r{cfg.get('rank','full')}")
+    runName = cfg.get("run_name", cfg["mode"] + "_r" + str(cfg.get("rank", "full")))
     os.environ["WANDB_PROJECT"] = cfg.get("wandb_project", "lora-replication")
-    training_args = build_training_args(cfg, run_name)
+    trainingArgs = build_training_args(cfg, runName)
     optimizer = build_optimizer(model, cfg)
 
     trainer = Trainer(
         model=model,
-        args=training_args,
+        args=trainingArgs,
         train_dataset=tokenized["train"],
         eval_dataset=tokenized["validation"],
         data_collator=DataCollatorWithPadding(tokenizer),
@@ -202,45 +196,46 @@ def train(cfg: dict):
         torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
     trainer.train()
-    elapsed_sec = time.time() - t0
-    gpu_memory_mb = (
+    elapsedSec = time.time() - t0
+    gpuMemoryMb = (
         torch.cuda.max_memory_allocated() / (1024 ** 2)
         if torch.cuda.is_available() else 0.0
     )
-    metrics_eval = trainer.evaluate()
-    best_val_acc = float(
+    metricsEval = trainer.evaluate()
+    bestValAcc = float(
         trainer.state.best_metric
         if trainer.state.best_metric is not None
-        else metrics_eval.get("eval_accuracy", 0.0)
+        else metricsEval.get("eval_accuracy", 0.0)
     )
 
     os.makedirs("checkpoints", exist_ok=True)
     torch.save(
         lora_state_dict(model) if cfg["mode"] == "lora" else model.state_dict(),
-        f"checkpoints/{run_name}_best.pt",
+        "checkpoints/" + runName + "_best.pt",
     )
 
-    print(f"\nBest val accuracy: {best_val_acc:.4f}")
-    target_acc = cfg.get("target_accuracy", None)
-    if target_acc is not None and best_val_acc < target_acc:
+    print("\nBest val accuracy: " + format(bestValAcc, ".4f"))
+    targetAcc = cfg.get("target_accuracy", None)
+    if targetAcc is not None and bestValAcc < targetAcc:
         print(
-            f"[train] WARNING: best_val_accuracy={best_val_acc:.4f} is below target_accuracy={target_acc:.4f}."
+            "[train] WARNING: best_val_accuracy=" + format(bestValAcc, ".4f") +
+            " is below target_accuracy=" + format(targetAcc, ".4f") + "."
         )
-    wandb.summary["best_val_accuracy"] = best_val_acc
+    wandb.summary["best_val_accuracy"] = bestValAcc
     wandb.finish()
 
-    repo_root = Path(__file__).resolve().parents[1]
-    logs_dir = repo_root / "results" / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    
+    repoRoot = Path(__file__).resolve().parents[1]
+    logsDir = repoRoot / "results" / "logs"
+    logsDir.mkdir(parents=True, exist_ok=True)
+
     metrics = {
-        "run_name": run_name,
+        "run_name": runName,
         "task": cfg["task"],
         "mode": cfg["mode"],
         "target_modules": ",".join(cfg.get("target_modules", [])),
         "rank": cfg.get("rank", None),
         "alpha": cfg.get("alpha", None),
-        "val_accuracy": best_val_acc,
+        "val_accuracy": bestValAcc,
         "trainable_params": trainable,
         "total_params": total,
         "trainable_pct": 100 * trainable / total if total else 0.0,
@@ -250,11 +245,11 @@ def train(cfg: dict):
         "warmup_ratio": cfg.get("warmup_ratio", 0.0),
         "gradient_accumulation_steps": max(1, int(cfg.get("gradient_accumulation_steps", 1))),
         "seed": cfg.get("seed", 0),
-        "elapsed_sec": elapsed_sec,
-        "gpu_memory_mb": gpu_memory_mb,
+        "elapsed_sec": elapsedSec,
+        "gpu_memory_mb": gpuMemoryMb,
         "log_history": trainer.state.log_history,
     }
-    with open(logs_dir / f"{run_name}.json", "w") as f:
+    with open(logsDir / (runName + ".json"), "w") as f:
         json.dump(metrics, f, indent=2)
 
 

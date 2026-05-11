@@ -1,10 +1,3 @@
-"""
-data.py
--------
-Data loading utilities for GLUE benchmarks (SST-2, MRPC).
-Uses HuggingFace `datasets` + `transformers` tokenizer.
-"""
-
 from datasets import load_dataset
 from transformers import RobertaTokenizerFast
 from torch.utils.data import DataLoader
@@ -22,72 +15,56 @@ TASK_TO_NUM_LABELS = {
 }
 
 
-def get_tokenizer(model_name: str = "roberta-base") -> RobertaTokenizerFast:
-    return RobertaTokenizerFast.from_pretrained(model_name)
+def get_tokenizer(modelName: str = "roberta-base") -> RobertaTokenizerFast:
+    return RobertaTokenizerFast.from_pretrained(modelName)
 
 
 def get_dataloaders(
     task: str = "sst2",
-    model_name: str = "roberta-base",
-    max_length: int = 128,
-    batch_size: int = 32,
-    num_workers: int = 2,
+    modelName: str = "roberta-base",
+    maxLength: int = 128,
+    batchSize: int = 32,
+    numWorkers: int = 2,
 ):
-    """
-    Download (or load cached) GLUE task and return train/validation DataLoaders.
-
-    Args:
-        task:        GLUE task name, e.g. "sst2" or "mrpc".
-        model_name:  tokenizer to use.
-        max_length:  max token sequence length (truncate/pad to this).
-        batch_size:  DataLoader batch size.
-        num_workers: DataLoader worker processes.
-
-    Returns:
-        (train_loader, val_loader, num_labels)
-    """
+    # Return (trainLoader, valLoader, numLabels) for a GLUE task.
     assert task in TASK_TO_KEYS, f"Unsupported task '{task}'. Choose from {list(TASK_TO_KEYS)}"
 
-    tokenizer = get_tokenizer(model_name)
+    tokenizer = get_tokenizer(modelName)
     key1, key2 = TASK_TO_KEYS[task]
 
     raw = load_dataset("glue", task)
 
     def tokenize(batch):
         texts = (batch[key1],) if key2 is None else (batch[key1], batch[key2])
-        return tokenizer(
-            *texts,
-            truncation=True,
-            max_length=max_length,
-        )
+        return tokenizer(*texts, truncation=True, max_length=maxLength)
 
-    cols_to_remove = [c for c in raw["train"].column_names if c != "label"]
-    tokenized = raw.map(tokenize, batched=True, remove_columns=cols_to_remove)
+    colsToRemove = [c for c in raw["train"].column_names if c != "label"]
+    tokenized = raw.map(tokenize, batched=True, remove_columns=colsToRemove)
 
     tokenized = tokenized.rename_column("label", "labels")
     tokenized.set_format("torch")
 
     collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors="pt")
 
-    train_loader = DataLoader(
+    trainLoader = DataLoader(
         tokenized["train"],
-        batch_size=batch_size,
+        batch_size=batchSize,
         shuffle=True,
         num_workers=0,
         pin_memory=True,
         collate_fn=collator,
     )
-    val_loader = DataLoader(
+    valLoader = DataLoader(
         tokenized["validation"],
-        batch_size=batch_size,
+        batch_size=batchSize,
         shuffle=False,
         num_workers=0,
         pin_memory=True,
         collate_fn=collator,
     )
 
-    num_labels = TASK_TO_NUM_LABELS[task]
-    print(f"[data] Task={task} | Train={len(tokenized['train']):,} "
-          f"| Val={len(tokenized['validation']):,} | Labels={num_labels}")
+    numLabels = TASK_TO_NUM_LABELS[task]
+    print("[data] Task=" + str(task) + " | Train=" + format(len(tokenized["train"]), ",") +
+          " | Val=" + format(len(tokenized["validation"]), ",") + " | Labels=" + str(numLabels))
 
-    return train_loader, val_loader, num_labels
+    return trainLoader, valLoader, numLabels

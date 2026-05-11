@@ -1,51 +1,26 @@
-"""
-model.py
---------
-Thin wrapper around RoBERTa-base for sequence classification.
-Supports both full fine-tuning and LoRA fine-tuning via inject_lora().
-"""
-
 from transformers import RobertaForSequenceClassification
 from lora import inject_lora
 
 
 def build_model(
-    num_labels: int = 2,
-    model_name: str = "roberta-base",
+    numLabels: int = 2,
+    modelName: str = "roberta-base",
     mode: str = "lora",
     rank: int = 8,
     alpha: float = 8.0,
     dropout: float = 0.0,
-    target_modules: list = None,
-    lora_init: str = "paper",
-    lora_merge_weights: bool = True,
-    lora_train_bias: str = "none",
+    targetModules: list = None,
+    loraInit: str = "paper",
+    loraMergeWeights: bool = True,
+    loraTrainBias: str = "none",
 ):
-    """
-    Load pretrained RoBERTa-base and optionally inject LoRA adapters.
-
-    Args:
-        num_labels:     number of output classes.
-        model_name:     HuggingFace model hub identifier.
-        mode:           "lora" injects adapters and freezes base weights;
-                        "full" trains all parameters.
-        rank:           LoRA rank (ignored in full mode).
-        alpha:          LoRA alpha scaling (ignored in full mode).
-        dropout:        LoRA internal dropout (ignored in full mode).
-        target_modules: which linear layer names to replace with LoraLinear.
-        lora_init:      LoRA initialization style ("microsoft" | "paper").
-        lora_merge_weights: merge LoRA weights into base on eval().
-        lora_train_bias: train bias policy for LoRA mode.
-
-    Returns:
-        nn.Module ready for training.
-    """
-    if target_modules is None:
-        target_modules = ["query", "value"]
+    # Load pretrained RoBERTa-base and optionally inject LoRA adapters.
+    if targetModules is None:
+        targetModules = ["query", "value"]
 
     model = RobertaForSequenceClassification.from_pretrained(
-        model_name,
-        num_labels=num_labels,
+        modelName,
+        num_labels=numLabels,
     )
 
     if mode == "lora":
@@ -54,16 +29,16 @@ def build_model(
             rank=rank,
             alpha=alpha,
             dropout=dropout,
-            target_modules=target_modules,
-            init_method=lora_init,
-            merge_weights=lora_merge_weights,
-            train_bias=lora_train_bias,
+            targetModules=targetModules,
+            initMethod=loraInit,
+            mergeWeights=loraMergeWeights,
+            trainBias=loraTrainBias,
         )
     elif mode == "full":
         for param in model.parameters():
             param.requires_grad = True
         total = sum(p.numel() for p in model.parameters())
-        print(f"[build_model] Full fine-tune: {total:,} trainable params")
+        print("[build_model] Full fine-tune: " + format(total, ",") + " trainable params")
     else:
         raise ValueError(f"mode must be 'lora' or 'full', got '{mode}'")
 
