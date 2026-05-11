@@ -136,7 +136,10 @@ def build_variant(
                     ckpt = alt
             if not ckpt.exists():
                 raise FileNotFoundError(f"Missing LoRA r={rank} checkpoint: {ckpt}")
-        model = load_lora_backbone(ckpt, model, rank=rank, alpha=rank)
+        # Use the training-time alpha (8) rather than alpha=rank, otherwise the
+        # eval-time scaling factor alpha/r diverges from training (4x too large
+        # at r=32, 8x too small at r=1) and inflates the perplexity drift.
+        model = load_lora_backbone(ckpt, model, rank=rank, alpha=8.0)
     else:
         raise ValueError(f"Unknown variant: {variant}")
 
