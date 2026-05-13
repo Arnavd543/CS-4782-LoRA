@@ -25,6 +25,8 @@ paper's headline comparison and the single number that justifies its central cla
 updates suffice to match full fine-tuning. We reproduce this baseline and then run four extensions
 on top.
 
+(more interesting results and graphs/figures in here: https://drive.google.com/drive/folders/1QPv1wVYnolIMqpn9FnnjaUo0Etm-xyBo?usp=sharing)
+
 ## 3. GitHub Contents
 
 ```
