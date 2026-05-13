@@ -42,7 +42,7 @@ CS-4782-LoRA/
 │   ├── train.py                    # Training loop, W&B logging, Trainer wrapper
 │   ├── analyze.py                  # Aggregates per-run JSON logs into CSVs and figures
 │   ├── forgetting.py               # Masked-LM perplexity probe on wikitext-2
-│   ├── evaluate.py                 # Standalone post-hoc evaluation utility (not part of the main pipeline)
+│   ├── evaluate.py                 
 │   ├── Implement_LORA.ipynb        # End-to-end notebook driving every experiment on Colab
 │   └── configs/
 │       ├── baseline.yaml           # Full fine-tune (lr 2e-5)
@@ -56,12 +56,12 @@ CS-4782-LoRA/
 │   ├── baseline/ rank_sweep/ module_comparison/ extensions/ mrpc/ forgetting/
 │   │   └── figures/                # Per-experiment plots
 │   ├── logs/                       # Per-run JSON metrics
-│   ├── tables/                     # CSV summaries
-│   └── figures/                    # Cross-experiment overview plots
+│   ├── tables/                     # CSV summaries (more in drive)
+│   └── figures/                    # Cross-experiment overview plots (more in drive)
 ├── poster/
 │   └── LORA Presentation Poster.pdf
 └── report/
-    └── group_lora_2page_report.md  # 2-page summary report (exported to PDF for submission)
+    └── group_lora_2page_report.md  
 ```
 
 ## 4. Re-implementation Details
