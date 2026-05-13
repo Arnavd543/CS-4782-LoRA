@@ -21,40 +21,40 @@ DEFAULT_CHECKPOINTS_DIR = REPO_ROOT / "checkpoints"
 DEFAULT_RESULTS_DIR = REPO_ROOT / "results"
 
 
-def load_full_ft_backbone(checkpointPath: Path, mlmModel: RobertaForMaskedLM) -> RobertaForMaskedLM:
-    state = torch.load(checkpointPath, map_location="cpu")
-    backboneState = {k: v for k, v in state.items() if k.startswith("roberta.")}
-    missing, unexpected = mlmModel.load_state_dict(backboneState, strict=False)
-    print("  [full_ft] loaded " + str(len(backboneState)) + " backbone keys "
+def load_full_ft_backbone(checkpoint_path: Path, mlm_model: RobertaForMaskedLM) -> RobertaForMaskedLM:
+    state = torch.load(checkpoint_path, map_location="cpu")
+    backbone_state = {k: v for k, v in state.items() if k.startswith("roberta.")}
+    missing, unexpected = mlm_model.load_state_dict(backbone_state, strict=False)
+    print("  [full_ft] loaded " + str(len(backbone_state)) + " backbone keys "
           "(missing=" + str(len(missing)) + " unexpected=" + str(len(unexpected)) + ")")
-    return mlmModel
+    return mlm_model
 
 
 def load_lora_backbone(
-    checkpointPath: Path,
-    mlmModel: RobertaForMaskedLM,
+    checkpoint_path: Path,
+    mlm_model: RobertaForMaskedLM,
     rank: int,
     alpha: float = 8.0,
-    targetModules: Optional[List[str]] = None,
+    target_modules: Optional[List[str]] = None,
 ) -> RobertaForMaskedLM:
-    if targetModules is None:
-        targetModules = ["query", "value"]
+    if target_modules is None:
+        target_modules = ["query", "value"]
     inject_lora(
-        mlmModel,
+        mlm_model,
         rank=rank,
         alpha=alpha,
-        targetModules=targetModules,
-        initMethod="paper",
-        mergeWeights=True,
-        trainClassifier=False,
-        trainPooler=False,
+        target_modules=target_modules,
+        init_method="paper",
+        merge_weights=True,
+        train_classifier=False,
+        train_pooler=False,
     )
-    state = torch.load(checkpointPath, map_location="cpu")
-    loraState = {k: v for k, v in state.items() if "loraA" in k or "loraB" in k}
-    missing, unexpected = mlmModel.load_state_dict(loraState, strict=False)
-    print("  [lora r=" + str(rank) + "] loaded " + str(len(loraState)) + " LoRA keys "
+    state = torch.load(checkpoint_path, map_location="cpu")
+    lora_state = {k: v for k, v in state.items() if "loraA" in k or "loraB" in k}
+    missing, unexpected = mlm_model.load_state_dict(lora_state, strict=False)
+    print("  [lora r=" + str(rank) + "] loaded " + str(len(lora_state)) + " LoRA keys "
           "(missing=" + str(len(missing)) + " unexpected=" + str(len(unexpected)) + ")")
-    return mlmModel
+    return mlm_model
 
 
 @torch.no_grad()
@@ -63,74 +63,74 @@ def compute_perplexity(
     tokenizer,
     texts: List[str],
     device: torch.device,
-    maskProb: float = 0.15,
-    maxLength: int = 256,
+    mask_prob: float = 0.15,
+    max_length: int = 256,
     seed: int = 0,
 ) -> float:
     model.eval()
     g = torch.Generator(device="cpu").manual_seed(seed)
 
-    totalLoss = 0.0
-    totalMasked = 0
+    total_loss = 0.0
+    total_masked = 0
 
     for text in texts:
         inputs = tokenizer(
             text,
             return_tensors="pt",
             truncation=True,
-            max_length=maxLength,
+            max_length=max_length,
         )
-        inputIds = inputs["input_ids"].to(device)
-        attentionMask = inputs["attention_mask"].to(device)
-        labels = inputIds.clone()
+        input_ids = inputs["input_ids"].to(device)
+        attention_mask = inputs["attention_mask"].to(device)
+        labels = input_ids.clone()
 
-        specialTokensMask = tokenizer.get_special_tokens_mask(
-            inputIds[0].tolist(), already_has_special_tokens=True
+        special_tokens_mask = tokenizer.get_special_tokens_mask(
+            input_ids[0].tolist(), already_has_special_tokens=True
         )
-        specialTokensMask = torch.tensor(specialTokensMask, dtype=torch.bool, device=device).unsqueeze(0)
+        special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool, device=device).unsqueeze(0)
 
-        probMatrix = torch.full(labels.shape, maskProb, device="cpu")
-        maskedIndicesCpu = torch.bernoulli(probMatrix, generator=g).bool()
-        maskedIndices = maskedIndicesCpu.to(device) & ~specialTokensMask & attentionMask.bool()
+        prob_matrix = torch.full(labels.shape, mask_prob, device="cpu")
+        masked_indices_cpu = torch.bernoulli(prob_matrix, generator=g).bool()
+        masked_indices = masked_indices_cpu.to(device) & ~special_tokens_mask & attention_mask.bool()
 
-        if maskedIndices.sum() == 0:
+        if masked_indices.sum() == 0:
             continue
 
-        labels[~maskedIndices] = -100
-        maskedInputIds = inputIds.clone()
-        maskedInputIds[maskedIndices] = tokenizer.mask_token_id
+        labels[~masked_indices] = -100
+        masked_input_ids = input_ids.clone()
+        masked_input_ids[masked_indices] = tokenizer.mask_token_id
 
-        outputs = model(input_ids=maskedInputIds, attention_mask=attentionMask, labels=labels)
-        nMasked = int(maskedIndices.sum().item())
-        totalLoss += float(outputs.loss.item()) * nMasked
-        totalMasked += nMasked
+        outputs = model(input_ids=masked_input_ids, attention_mask=attention_mask, labels=labels)
+        n_masked = int(masked_indices.sum().item())
+        total_loss += float(outputs.loss.item()) * n_masked
+        total_masked += n_masked
 
-    if totalMasked == 0:
+    if total_masked == 0:
         return float("nan")
-    return float(torch.exp(torch.tensor(totalLoss / totalMasked)).item())
+    return float(torch.exp(torch.tensor(total_loss / total_masked)).item())
 
 
 def build_variant(
     variant: str,
-    baseModelName: str,
+    base_model_name: str,
     device: torch.device,
-    checkpointsDir: Path,
+    checkpoints_dir: Path,
 ) -> RobertaForMaskedLM:
-    model = RobertaForMaskedLM.from_pretrained(baseModelName)
+    model = RobertaForMaskedLM.from_pretrained(base_model_name)
 
     if variant == "pretrained":
         pass
     elif variant == "full_ft":
-        ckpt = checkpointsDir / "baseline_full_ft_best.pt"
+        ckpt = checkpoints_dir / "baseline_full_ft_best.pt"
         if not ckpt.exists():
             raise FileNotFoundError(f"Missing checkpoint: {ckpt}")
         model = load_full_ft_backbone(ckpt, model)
     elif variant.startswith("lora_r"):
         rank = int(variant.split("_r")[1])
-        ckpt = checkpointsDir / ("lora_rank_" + str(rank) + "_best.pt")
+        ckpt = checkpoints_dir / ("lora_rank_" + str(rank) + "_best.pt")
         if not ckpt.exists():
             if rank == 8:
-                alt = checkpointsDir / "baseline_lora_r8_paper_best.pt"
+                alt = checkpoints_dir / "baseline_lora_r8_paper_best.pt"
                 if alt.exists():
                     ckpt = alt
             if not ckpt.exists():
@@ -174,8 +174,8 @@ def plot_perplexity(rows: List[Dict], path: Path):
             f"{p:.2f}",
             ha="center", va="bottom", fontsize=9,
         )
-    prePpl = rows[0]["perplexity"]
-    plt.axhline(prePpl, color="tab:gray", linestyle="--", alpha=0.5, label="pretrained")
+    pre_ppl = rows[0]["perplexity"]
+    plt.axhline(pre_ppl, color="tab:gray", linestyle="--", alpha=0.5, label="pretrained")
     plt.legend()
     plt.tight_layout()
     plt.savefig(path)
@@ -209,32 +209,32 @@ def main():
     )
     args = parser.parse_args()
 
-    checkpointsDir = Path(args.checkpoints_dir)
-    resultsDir = Path(args.results_dir)
-    forgettingDir = resultsDir / "forgetting"
-    figuresDir = forgettingDir / "figures"
-    forgettingDir.mkdir(parents=True, exist_ok=True)
-    figuresDir.mkdir(parents=True, exist_ok=True)
+    checkpoints_dir = Path(args.checkpoints_dir)
+    results_dir = Path(args.results_dir)
+    forgetting_dir = results_dir / "forgetting"
+    figures_dir = forgetting_dir / "figures"
+    forgetting_dir.mkdir(parents=True, exist_ok=True)
+    figures_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("[forgetting] Device: " + str(device))
     print("[forgetting] Loading wikitext-2 test split...")
 
     ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-    rawTexts = [t for t in ds["text"] if len(t.strip()) > 50]
-    texts = rawTexts[: args.num_texts]
+    raw_texts = [t for t in ds["text"] if len(t.strip()) > 50]
+    texts = raw_texts[: args.num_texts]
     print("[forgetting] Evaluating on " + str(len(texts)) + " texts.")
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
 
     rows: List[Dict] = []
-    prePpl = None
+    pre_ppl = None
 
     for variant in variants:
         print("\n[forgetting] === " + variant + " ===")
         try:
-            model = build_variant(variant, args.base_model, device, checkpointsDir)
+            model = build_variant(variant, args.base_model, device, checkpoints_dir)
         except FileNotFoundError as e:
             print("  SKIPPED: " + str(e))
             continue
@@ -244,18 +244,18 @@ def main():
             tokenizer,
             texts,
             device,
-            maskProb=args.mask_prob,
-            maxLength=args.max_length,
+            mask_prob=args.mask_prob,
+            max_length=args.max_length,
             seed=args.seed,
         )
-        if prePpl is None and variant == "pretrained":
-            prePpl = ppl
+        if pre_ppl is None and variant == "pretrained":
+            pre_ppl = ppl
 
-        increase = (ppl - prePpl) if prePpl is not None else 0.0
-        pct = (100.0 * increase / prePpl) if prePpl else 0.0
+        increase = (ppl - pre_ppl) if pre_ppl is not None else 0.0
+        pct = (100.0 * increase / pre_ppl) if pre_ppl else 0.0
 
         print("  perplexity = " + format(ppl, ".4f"))
-        if prePpl is not None:
+        if pre_ppl is not None:
             print("  delta vs pretrained = +" + format(increase, ".4f") + " (" + format(pct, "+.2f") + "%)")
 
         rows.append({
@@ -269,11 +269,11 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    save_csv(forgettingDir / "perplexity.csv", rows)
-    plot_perplexity(rows, figuresDir / "perplexity_comparison.png")
+    save_csv(forgetting_dir / "perplexity.csv", rows)
+    plot_perplexity(rows, figures_dir / "perplexity_comparison.png")
 
-    print("\n[forgetting] Saved " + str(forgettingDir / "perplexity.csv"))
-    print("[forgetting] Saved " + str(figuresDir / "perplexity_comparison.png"))
+    print("\n[forgetting] Saved " + str(forgetting_dir / "perplexity.csv"))
+    print("[forgetting] Saved " + str(figures_dir / "perplexity_comparison.png"))
 
 
 if __name__ == "__main__":

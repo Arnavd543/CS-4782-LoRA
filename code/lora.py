@@ -11,89 +11,83 @@ class LoraLinear(nn.Linear):
 
     def __init__(
         self,
-        inFeatures: int,
-        outFeatures: int,
+        in_features: int,
+        out_features: int,
         rank: int = 8,
         alpha: float = 8.0,
         dropout: float = 0.0,
-        fanInFanOut: bool = False,
-        mergeWeights: bool = True,
-        initMethod: str = "paper",
-        originalLayer: Optional[nn.Linear] = None,
+        merge_weights: bool = True,
+        init_method: str = "paper",
+        original_layer: Optional[nn.Linear] = None,
     ):
-        bias = originalLayer.bias is not None if originalLayer is not None else True
-        super().__init__(inFeatures, outFeatures, bias=bias)
+        bias = original_layer.bias is not None if original_layer is not None else True
+        super().__init__(in_features, out_features, bias=bias)
 
         self.rank = rank
         self.alpha = alpha
         self.scaling = alpha / rank if rank > 0 else 1.0
-        self.fanInFanOut = fanInFanOut
-        self.mergeWeights = mergeWeights
+        self.merge_weights = merge_weights
         self.merged = False
-        self.initMethod = initMethod
+        self.init_method = init_method
 
+        # loraA / loraB attribute names are kept as-is (paper notation A, B) so that existing
+        # checkpoint keys (e.g. "...query.loraA") continue to load.
         if rank > 0:
-            self.loraA = nn.Parameter(self.weight.new_zeros((rank, inFeatures)))
-            self.loraB = nn.Parameter(self.weight.new_zeros((outFeatures, rank)))
+            self.loraA = nn.Parameter(self.weight.new_zeros((rank, in_features)))
+            self.loraB = nn.Parameter(self.weight.new_zeros((out_features, rank)))
             self.weight.requires_grad = False
         else:
             self.register_parameter("loraA", None)
             self.register_parameter("loraB", None)
 
-        if originalLayer is not None:
-            self.weight.data.copy_(originalLayer.weight.data)
-            if self.bias is not None and originalLayer.bias is not None:
-                self.bias.data.copy_(originalLayer.bias.data)
+        if original_layer is not None:
+            self.weight.data.copy_(original_layer.weight.data)
+            if self.bias is not None and original_layer.bias is not None:
+                self.bias.data.copy_(original_layer.bias.data)
 
-        self.loraDropout = nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
-
-        if self.fanInFanOut:
-            self.weight.data = self.weight.data.transpose(0, 1)
+        self.lora_dropout = nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
 
         self.reset_lora_parameters()
 
     def reset_lora_parameters(self) -> None:
         if self.rank <= 0:
             return
-        if self.initMethod == "microsoft":
+        if self.init_method == "microsoft":
             nn.init.kaiming_uniform_(self.loraA, a=math.sqrt(5))
             nn.init.zeros_(self.loraB)
-        elif self.initMethod == "paper":
+        elif self.init_method == "paper":
             nn.init.normal_(self.loraA, mean=0.0, std=0.02)
             nn.init.zeros_(self.loraB)
         else:
             raise ValueError(
-                f"Unknown LoRA initMethod='{self.initMethod}'. Use 'microsoft' or 'paper'."
+                f"Unknown LoRA init_method='{self.init_method}'. Use 'microsoft' or 'paper'."
             )
-
-    def _transpose_if_needed(self, w: torch.Tensor) -> torch.Tensor:
-        return w.transpose(0, 1) if self.fanInFanOut else w
 
     def train(self, mode: bool = True):
         super().train(mode)
         if self.rank <= 0:
             return self
 
-        deltaW = self._transpose_if_needed(self.loraB @ self.loraA) * self.scaling
+        delta_w = (self.loraB @ self.loraA) * self.scaling
         if mode:
-            if self.mergeWeights and self.merged:
-                self.weight.data -= deltaW
+            if self.merge_weights and self.merged:
+                self.weight.data -= delta_w
                 self.merged = False
         else:
-            if self.mergeWeights and not self.merged:
-                self.weight.data += deltaW
+            if self.merge_weights and not self.merged:
+                self.weight.data += delta_w
                 self.merged = True
         return self
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        base = F.linear(x, self._transpose_if_needed(self.weight), bias=self.bias)
+        base = F.linear(x, self.weight, bias=self.bias)
         if self.rank > 0 and not self.merged:
-            loraOut = (
-                self.loraDropout(x)
+            lora_out = (
+                self.lora_dropout(x)
                 @ self.loraA.transpose(0, 1)
                 @ self.loraB.transpose(0, 1)
             )
-            base = base + loraOut * self.scaling
+            base = base + lora_out * self.scaling
         return base
 
     def extra_repr(self) -> str:
@@ -101,7 +95,7 @@ class LoraLinear(nn.Linear):
             "in_features=" + str(self.in_features) + ", out_features=" + str(self.out_features) +
             ", rank=" + str(self.rank) + ", alpha=" + str(self.alpha) +
             ", scaling=" + format(self.scaling, ".4f") +
-            ", init=" + self.initMethod + ", merged=" + str(self.merged)
+            ", init=" + self.init_method + ", merged=" + str(self.merged)
         )
 
 
@@ -131,22 +125,22 @@ def inject_lora(
     rank: int = 8,
     alpha: float = 8.0,
     dropout: float = 0.0,
-    targetModules: Optional[List[str]] = None,
-    initMethod: str = "paper",
-    mergeWeights: bool = True,
-    trainClassifier: bool = True,
-    trainPooler: bool = True,
-    trainBias: str = "none",
+    target_modules: Optional[List[str]] = None,
+    init_method: str = "paper",
+    merge_weights: bool = True,
+    train_classifier: bool = True,
+    train_pooler: bool = True,
+    train_bias: str = "none",
 ) -> nn.Module:
     # Replace matching nn.Linear layers with LoraLinear in-place.
-    if targetModules is None:
-        targetModules = ["query", "value"]
+    if target_modules is None:
+        target_modules = ["query", "value"]
 
     replaced = 0
     for name, module in list(model.named_modules()):
         if not isinstance(module, nn.Linear):
             continue
-        if not any(target in name for target in targetModules):
+        if not any(target in name for target in target_modules):
             continue
 
         parts = name.split(".")
@@ -159,29 +153,29 @@ def inject_lora(
             parent,
             attr,
             LoraLinear(
-                inFeatures=module.in_features,
-                outFeatures=module.out_features,
+                in_features=module.in_features,
+                out_features=module.out_features,
                 rank=rank,
                 alpha=alpha,
                 dropout=dropout,
-                mergeWeights=mergeWeights,
-                initMethod=initMethod,
-                originalLayer=module,
+                merge_weights=merge_weights,
+                init_method=init_method,
+                original_layer=module,
             ),
         )
         replaced += 1
 
-    mark_only_lora_as_trainable(model, bias=trainBias)
+    mark_only_lora_as_trainable(model, bias=train_bias)
 
     for name, param in model.named_parameters():
-        if trainClassifier and "classifier" in name:
+        if train_classifier and "classifier" in name:
             param.requires_grad = True
-        if trainPooler and "pooler" in name:
+        if train_pooler and "pooler" in name:
             param.requires_grad = True
 
     print(
         "[inject_lora] Replaced " + str(replaced) + " linear layers -> LoraLinear "
-        "(rank=" + str(rank) + ", alpha=" + str(alpha) + ", init=" + initMethod + ", targets=" + str(targetModules) + ")"
+        "(rank=" + str(rank) + ", alpha=" + str(alpha) + ", init=" + init_method + ", targets=" + str(target_modules) + ")"
     )
     _print_param_stats(model)
     return model
@@ -190,45 +184,45 @@ def inject_lora(
 def lora_state_dict(
     model: nn.Module,
     bias: str = "none",
-    includeClassifier: bool = True,
-    includePooler: bool = True,
+    include_classifier: bool = True,
+    include_pooler: bool = True,
 ) -> dict:
     # Return LoRA-focused state dict; includes classifier head by default.
     state = model.state_dict()
 
-    keepKeys = set()
+    keep_keys = set()
     for key in state:
         if "loraA" in key or "loraB" in key:
-            keepKeys.add(key)
+            keep_keys.add(key)
 
     if bias == "all":
         for key in state:
             if "bias" in key:
-                keepKeys.add(key)
+                keep_keys.add(key)
     elif bias == "lora_only":
-        for key in list(keepKeys):
+        for key in list(keep_keys):
             if "loraA" in key:
-                prefix = key[:key.rfind(".loraA")]
+                prefix = key[: key.rfind(".loraA")]
             elif "loraB" in key:
-                prefix = key[:key.rfind(".loraB")]
+                prefix = key[: key.rfind(".loraB")]
             else:
                 continue
-            biasKey = prefix + ".bias"
-            if biasKey in state:
-                keepKeys.add(biasKey)
+            bias_key = prefix + ".bias"
+            if bias_key in state:
+                keep_keys.add(bias_key)
     elif bias != "none":
         raise NotImplementedError(f"Unsupported bias mode '{bias}'")
 
-    if includeClassifier:
+    if include_classifier:
         for key in state:
             if "classifier" in key:
-                keepKeys.add(key)
-    if includePooler:
+                keep_keys.add(key)
+    if include_pooler:
         for key in state:
             if "pooler" in key:
-                keepKeys.add(key)
+                keep_keys.add(key)
 
-    return {k: state[k] for k in state if k in keepKeys}
+    return {k: state[k] for k in state if k in keep_keys}
 
 
 def _print_param_stats(model: nn.Module) -> None:

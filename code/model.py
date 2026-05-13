@@ -3,24 +3,24 @@ from lora import inject_lora
 
 
 def build_model(
-    numLabels: int = 2,
-    modelName: str = "roberta-base",
+    num_labels: int = 2,
+    model_name: str = "roberta-base",
     mode: str = "lora",
     rank: int = 8,
     alpha: float = 8.0,
     dropout: float = 0.0,
-    targetModules: list = None,
-    loraInit: str = "paper",
-    loraMergeWeights: bool = True,
-    loraTrainBias: str = "none",
+    target_modules: list = None,
+    lora_init: str = "paper",
+    lora_merge_weights: bool = True,
+    lora_train_bias: str = "none",
 ):
     # Load pretrained RoBERTa-base and optionally inject LoRA adapters.
-    if targetModules is None:
-        targetModules = ["query", "value"]
+    if target_modules is None:
+        target_modules = ["query", "value"]
 
     model = RobertaForSequenceClassification.from_pretrained(
-        modelName,
-        num_labels=numLabels,
+        model_name,
+        num_labels=num_labels,
     )
 
     if mode == "lora":
@@ -29,10 +29,10 @@ def build_model(
             rank=rank,
             alpha=alpha,
             dropout=dropout,
-            targetModules=targetModules,
-            initMethod=loraInit,
-            mergeWeights=loraMergeWeights,
-            trainBias=loraTrainBias,
+            target_modules=target_modules,
+            init_method=lora_init,
+            merge_weights=lora_merge_weights,
+            train_bias=lora_train_bias,
         )
     elif mode == "full":
         for param in model.parameters():

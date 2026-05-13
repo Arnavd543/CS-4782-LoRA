@@ -1,262 +1,220 @@
 # LoRA: Low-Rank Adaptation of Large Language Models — Replication & Extensions
 
-> Re-implementation of [Hu et al. 2021](https://arxiv.org/abs/2106.09685) with proposed improvements,
-> evaluated on GLUE / SST-2 using RoBERTa-base.
+A from-scratch re-implementation of [Hu et al. 2021](https://arxiv.org/abs/2106.09685) on top of
+HuggingFace Transformers, with four extensions, evaluated on GLUE / SST-2 and MRPC using
+RoBERTa-base. Final project for CS 4782 (Spring 2026).
+
+**Authors:** Rahul B, Amit S, Arnav D
 
 ---
 
-## Table of Contents
-1. [Summary](#summary)
-2. [Justification](#justification)
-3. [Repository Structure](#repository-structure)
-4. [Setup](#setup)
-5. [Data](#data)
-6. [Re-implementation Details](#re-implementation-details)
-7. [Proposed Improvements](#proposed-improvements)
-8. [Results](#results)
-9. [Reproducing Experiments](#reproducing-experiments)
-10. [References](#references)
+## 1. Introduction
 
----
+This repository contains a re-implementation of *LoRA: Low-Rank Adaptation of Large Language Models*
+(Hu et al., 2021), the paper that introduced the now-dominant parameter-efficient fine-tuning method
+for large pretrained transformers. The key idea is to freeze the pretrained weight `W₀` and learn a
+low-rank update `ΔW = BA` (with `A ∈ ℝʳˣᵈ`, `B ∈ ℝᵈˣʳ`, `r ≪ d`), scaled by `α / r`. Training
+under 1% of parameters reaches full fine-tuning accuracy on GLUE, and at inference `BA` merges back
+into `W₀` so there is no extra latency.
 
-## Summary
+## 2. Chosen Result
 
-Large language models normally require full fine-tuning to adapt to downstream tasks, which involves
-updating potentially billions of parameters and demands significant memory and compute resources.
+We target the **RoBERTa-base SST-2 row of Table 2** in the paper: full fine-tuning at **94.8%**
+and LoRA r=8 (Q+V projections, 0.3M trainable parameters out of 125M) at **95.1%**. This is the
+paper's headline comparison and the single number that justifies its central claim — that low-rank
+updates suffice to match full fine-tuning. We reproduce this baseline and then run four extensions
+on top.
 
-The LoRA paper proposes a **parameter-efficient fine-tuning** method that:
-- Freezes the original pretrained weights entirely.
-- Injects trainable low-rank matrices `A ∈ R^{r×d}` and `B ∈ R^{d×r}` into each targeted linear layer.
-- Approximates the weight update as `ΔW = BA`, scaled by `α/r`.
-
-Our goal is to demonstrate that LoRA achieves **similar task performance** to full fine-tuning while
-**drastically reducing** the number of trainable parameters (< 1% of total).
-
----
-
-## Justification
-
-Parameter-efficient training techniques are critical for scaling modern machine learning systems.
-Full fine-tuning requires large compute clusters; LoRA enables efficient adaptation of large models
-on much smaller hardware (single T4/A100 GPU). The ability to modify LLMs for a variety of downstream
-tasks without touching pretrained weights is a foundational capability, and LoRA is one of the most
-compute-efficient ways to enable it.
-
----
-
-## Repository Structure
+## 3. GitHub Contents
 
 ```
-lora-replication/
-├── README.md                  # This file
-├── LICENSE                    # MIT License
+CS-4782-LoRA/
+├── README.md                       # This file
+├── LICENSE                         # MIT
 ├── .gitignore
-│
 ├── code/
-│   ├── requirements.txt       # All Python dependencies
-│   ├── lora.py                # LoraLinear layer + inject_lora() entry point
-│   ├── model.py               # RoBERTa-base wrapper with classification head
-│   ├── data.py                # GLUE / SST-2 data loaders via HuggingFace datasets
-│   ├── train.py               # Training loop (supports full FT + LoRA modes)
-│   ├── evaluate.py            # Accuracy, trainable param count, GPU memory reporting
-│   ├── analyze.py             # Aggregates JSON logs into figures/CSVs
+│   ├── requirements.txt
+│   ├── lora.py                     # LoraLinear layer + inject_lora() entry point
+│   ├── model.py                    # RoBERTa-base wrapper (LoRA or full FT mode)
+│   ├── data.py                     # GLUE task constants + standalone DataLoader helper
+│   ├── train.py                    # Training loop, W&B logging, Trainer wrapper
+│   ├── analyze.py                  # Aggregates per-run JSON logs into CSVs and figures
+│   ├── forgetting.py               # Masked-LM perplexity probe on wikitext-2
+│   ├── evaluate.py                 # Standalone post-hoc evaluation utility (not part of the main pipeline)
+│   ├── Implement_LORA.ipynb        # End-to-end notebook driving every experiment on Colab
 │   └── configs/
-│       ├── baseline.yaml      # Full fine-tune hyperparameters
-│       └── lora_r8.yaml       # Paper-style LoRA rank=8, alpha=8 baseline
-│
+│       ├── baseline.yaml           # Full fine-tune (lr 2e-5)
+│       ├── lora_r8.yaml            # Paper-style LoRA (r=8, α=8, Q+V, paper init)
+│       ├── lora_plus_r8.yaml       # LoRA+ (asymmetric lr, lr_B = 16 · lr_A)
+│       ├── lora_dropout_r8.yaml    # LoRA + dropout p=0.05 on the low-rank path
+│       └── lora_plus_dropout_r8.yaml
 ├── data/
-│   └── README.md              # How to obtain / reproduce datasets
-│
+│   └── README.md                   # Dataset acquisition (HuggingFace datasets, auto-download)
 ├── results/
-│   ├── figures/               # Accuracy vs rank plots, param count comparisons
-│   ├── tables/                # CSV tables of all run metrics
-│   └── logs/                  # W&B exported run logs
-│
+│   ├── baseline/ rank_sweep/ module_comparison/ extensions/ mrpc/ forgetting/
+│   │   └── figures/                # Per-experiment plots
+│   ├── logs/                       # Per-run JSON metrics
+│   ├── tables/                     # CSV summaries
+│   └── figures/                    # Cross-experiment overview plots
 ├── poster/
-│   └── poster.pdf             # In-class presentation poster
-│
+│   └── LORA Presentation Poster.pdf
 └── report/
-    └── report.pdf             # Final written report
+    └── group_lora_2page_report.md  # 2-page summary report (exported to PDF for submission)
 ```
 
----
+## 4. Re-implementation Details
 
-## Setup
+**Model & datasets.** RoBERTa-base on SST-2 (67,349 train / 872 dev) and MRPC (3,668 train / 408 dev),
+loaded via `datasets.load_dataset("glue", task)`. Max sequence length 128, batch size 32.
 
-### 1. Clone the repo
+**LoraLinear layer** (`code/lora.py`):
+- Subclasses `nn.Linear`, copies and freezes the pretrained weight at construction.
+- Adds trainable `A ∈ ℝʳˣᵈⁱⁿ` (init `N(0, 0.02)` per paper §4) and `B ∈ ℝᵈᵒᵘᵗˣʳ` (init zero).
+- `forward(x)` returns `W₀x + (α / r) · BAx`.
+- On `model.eval()`, merges `BA` into `W₀`; on `model.train()`, un-merges. Zero added inference
+  latency.
+- `inject_lora(model, rank, alpha, target_modules, ...)` walks the model tree and replaces matching
+  `nn.Linear` modules in place. Only LoRA parameters, the classification head, and the pooler
+  receive gradients.
+
+**Training.** AdamW with linear warmup (6% of steps) and linear decay, 10 epochs per run. LoRA
+learning rate 5e-4, full fine-tuning 2e-5 (paper hyperparameters). Mixed-precision (fp16) when a
+CUDA device is available. Driven by `train.py` via per-experiment YAML configs in `code/configs/`.
+
+**Extensions.**
+1. **Rank sweep** — `r ∈ {1, 2, 4, 8, 16, 32}` at fixed `α = 8`.
+2. **Target-module sweep** at `r = 4` — Wq, Wk, Wv, QKV, attention-output, FFN-up, FFN-down.
+3. **LoRA+** (Hayou et al., 2024) — asymmetric learning rates, `lr_B = 16 · lr_A`.
+4. **LoRA + dropout** — `Dropout(p=0.05)` on the low-rank path.
+5. **Forgetting analysis** — masked-LM perplexity on wikitext-2 before vs after SST-2
+   fine-tuning, for the pretrained model, full FT, and LoRA at r=1/8/32 (`code/forgetting.py`).
+
+**Evaluation metrics.** Validation accuracy on the GLUE dev split (primary). Trainable parameter
+count, peak GPU memory, and wall-clock time are also logged per run.
+
+## 5. Reproduction Steps
+
+### Environment
 
 ```bash
-git clone https://github.com/<your-username>/lora-replication.git
-cd lora-replication
-```
-
-### 2. Install dependencies
-
-```bash
+git clone https://github.com/Arnavd543/CS-4782-LoRA.git
+cd CS-4782-LoRA
 pip install -r code/requirements.txt
 ```
 
-### 3. (Colab) Mount Drive and pull repo
+Tested on Google Colab with an A100 GPU. CPU works for tiny smoke tests; a single training run
+needs roughly 15–20 minutes per 10 epochs on an A100.
 
-```python
-from google.colab import drive
-drive.mount('/content/drive')
+### Reproducing all experiments (Colab)
 
-!git clone https://github.com/<your-username>/lora-replication.git
-%cd lora-replication
-!pip install -r code/requirements.txt
-```
+Open `code/Implement_LORA.ipynb` in Google Colab with an A100 (or T4 with longer runtimes) and run
+all cells. The notebook mounts Google Drive and writes checkpoints/results directly to a
+`lora_results/` folder via the `--checkpoints_dir` and `--results_dir` flags, so nothing needs to
+be copied back after each run.
 
-Set your W&B key:
-
-```python
-import os
-os.environ["WANDB_API_KEY"] = "your_key_here"  # or use Colab Secrets
-```
-
----
-
-## Data
-
-See [`data/README.md`](data/README.md) for full instructions.
-
-**Quick start** — datasets are downloaded automatically via HuggingFace `datasets`:
-
-```python
-from datasets import load_dataset
-dataset = load_dataset("glue", "sst2")
-```
-
-Datasets used:
-| Dataset | Task | Train | Validation |
-|---------|------|-------|------------|
-| SST-2   | Sentiment classification | 67,349 | 872 |
-| MRPC    | Paraphrase detection     | 3,668  | 408 |
-
----
-
-## Re-implementation Details
-
-### LoRA layer (`code/lora.py`)
-
-The core is a drop-in replacement for `nn.Linear`:
-
-```
-forward(x):
-    return W₀x + (x @ Aᵀ @ Bᵀ) * (α / r)
-```
-
-- `W₀` is **frozen** (`requires_grad=False`)
-- `A` is initialized `~ N(0, 0.02)` (Gaussian, per paper §4), `B` is initialized to **zeros** (so ΔW = BA = 0 at step 0)
-- `inject_lora(model, rank, alpha, target_modules)` walks the model tree and replaces matching
-  `nn.Linear` modules in-place
-
-### What is frozen vs. trained
-
-| Parameters | Frozen | Trainable |
-|-----------|--------|-----------|
-| Pretrained W₀ | ✓ | |
-| LoRA A, B matrices | | ✓ |
-| Classification head | | ✓ |
-
-### Default hyperparameters (LoRA)
-
-| Hyperparameter | Value |
-|---------------|-------|
-| Rank `r` | 8 |
-| Alpha `α` | 8 (= rank, paper-style baseline) |
-| Target modules | `query`, `value` |
-| Learning rate | 5e-4 |
-| Batch size | 32 (`gradient_accumulation_steps=1`) |
-| Epochs | 10 (baseline block in notebook can be increased) |
-| Weight decay | 0.1 |
-| LoRA init | `A ~ N(0, 0.02)`, `B = 0` |
-| Optimizer | AdamW |
-| LR schedule | Linear warmup (6%) then linear decay |
-
----
-
-## Proposed Improvements
-
-Beyond the base replication we implement and evaluate four extensions:
-
-### 1. LoRA+ — Asymmetric learning rates
-Set `lr(B) = 16 × lr(A)`. The B matrix acts as the output projection and benefits from faster
-updates; A acts as a feature extractor and should update slowly. Zero extra compute cost.
-
-### 2. Full-layer injection sweep
-Extend adapters beyond Q+V to `{Q, K, V, O, FFN-up, FFN-down}` at lower rank (r=2 or r=4),
-keeping the total parameter budget fixed. Identifies which layers contribute most.
-
-### 3. LoRA + dropout
-Insert `nn.Dropout(p=0.05)` between A and B in the forward pass to regularise the low-rank
-path. Particularly helpful on small datasets (MRPC) where overfitting is more likely.
-
-### 4. AdaLoRA — Adaptive rank allocation
-Periodically SVD-decompose each `BA` product and prune singular values below a threshold,
-reallocating rank budget to layers that show higher importance. Replicates the core idea of
-[Zhang et al. 2023](https://arxiv.org/abs/2303.10512) in our simplified codebase.
-
----
-
-## Results
-
-See [`results/`](results/) for full tables and figures.
-
-**Summary table** (SST-2, RoBERTa-base):
-
-| Method | Accuracy | Trainable Params | GPU Mem (MB) |
-|--------|----------|-----------------|--------------|
-| Full fine-tune | 94.8% | 125M (100%) | ~5,800 |
-| LoRA r=8 (Q+V) | ~94.5% | ~300K (0.24%) | ~2,100 |
-| LoRA+ r=8 | TBD | ~300K (0.24%) | ~2,100 |
-| LoRA r=8 + dropout | TBD | ~300K (0.24%) | ~2,100 |
-| Full-layer r=4 | TBD | ~600K (0.48%) | ~2,300 |
-
-*Results cells marked TBD will be filled after experiments complete.*
-
----
-
-## Reproducing Experiments
-
-### Baseline (full fine-tune)
+### Running individual scripts
 
 ```bash
-python code/train.py --config code/configs/baseline.yaml
-```
+# Baseline runs
+python code/train.py --config code/configs/baseline.yaml --run_name baseline_full_ft
+python code/train.py --config code/configs/lora_r8.yaml  --run_name baseline_lora_r8_paper
 
-### LoRA (rank=8, Q+V)
-
-```bash
-python code/train.py --config code/configs/lora_r8.yaml
-```
-
-### Rank sweep (lower compute)
-
-```bash
+# Rank sweep
 for r in 1 2 4 8 16 32; do
-  python code/train.py --config code/configs/lora_r8.yaml --epochs 3 --rank $r --run_name lora_rank_${r}
+  python code/train.py --config code/configs/lora_r8.yaml --rank $r --run_name lora_rank_$r
 done
-```
 
-### All experiments (Colab one-liner)
+# Target-module sweep at r=4
+python code/train.py --config code/configs/lora_r8.yaml --rank 4 --target_modules query --run_name lora_module_Wq
+# (...and analogous calls for key/value/QKV/intermediate.dense/output.dense/attention.output.dense)
 
-Open `code/Implement_LORA.ipynb` in Google Colab with a T4/A100 runtime and run all cells.
+# Extensions
+python code/train.py --config code/configs/lora_plus_r8.yaml          --run_name lora_plus_r8
+python code/train.py --config code/configs/lora_dropout_r8.yaml       --run_name lora_dropout_r8
+python code/train.py --config code/configs/lora_plus_dropout_r8.yaml  --run_name lora_plus_dropout_r8
 
-### Analyze collected logs
-
-After runs complete, aggregate figures and tables with:
-
-```bash
+# Aggregate per-run JSON logs into CSVs and figures
 python code/analyze.py
+
+# Forgetting probe (requires the trained checkpoints listed above)
+python code/forgetting.py
 ```
 
----
+All scripts accept `--checkpoints_dir` and `--results_dir` so you can point them at Google Drive
+directly instead of writing to a local `checkpoints/` and `results/` tree.
 
-## References
+### Hardware
 
-- Hu, E. et al. (2021). *LoRA: Low-Rank Adaptation of Large Language Models.* arXiv:2106.09685
-- Zhang, Q. et al. (2023). *AdaLoRA: Adaptive Budget Allocation for Parameter-Efficient Fine-Tuning.* arXiv:2303.10512
-- Hayou, S. et al. (2024). *LoRA+: Efficient Low Rank Adaptation of Large Models.* arXiv:2402.12354
-- Liu, Y. et al. (2019). *RoBERTa: A Robustly Optimized BERT Pretraining Approach.* arXiv:1907.11692
-- Wang, A. et al. (2018). *GLUE: A Multi-Task Benchmark.* arXiv:1804.07461
+| Component | Used |
+|---|---|
+| GPU | NVIDIA A100 (Colab Pro) |
+| Time per full FT run | ~19 minutes (10 epochs, SST-2) |
+| Time per LoRA r=8 run | ~17 minutes (10 epochs, SST-2) |
+| Peak memory: full FT | ~2.5 GB |
+| Peak memory: LoRA r=8 | ~1.3 GB |
+
+## 6. Results / Insights
+
+| Configuration | Trainable params | SST-2 dev acc |
+|---|---:|---:|
+| Full fine-tuning | 124.6 M | **0.9472** |
+| LoRA r=8 (Q+V, paper init) | 0.89 M (0.71%) | **0.9415** |
+| LoRA r=1 (Q+V) | 0.63 M | 0.9392 |
+| LoRA r=16 (Q+V) | 1.18 M | 0.9427 |
+| LoRA r=32 (Q+V) | 1.77 M | 0.9415 |
+| LoRA r=4, FFN_up only | 0.78 M | **0.9541** |
+| LoRA+ r=8 (lr_B / lr_A = 16) | 0.89 M | **0.9484** |
+| LoRA r=8 + dropout 0.05 | 0.89 M | 0.9472 |
+| MRPC: Full FT | 124.6 M | 0.8848 |
+| MRPC: LoRA r=8 | 0.89 M | 0.8701 |
+
+Key findings:
+
+- **Headline replication.** Full FT 94.72% vs LoRA r=8 94.15% — within sampling noise of the
+  paper's 94.8 / 95.1 at 0.71% of trainable parameters and ~49% less peak GPU memory. The MRPC
+  baselines repeat the picture (88.5 vs 87.0).
+- **Rank is essentially flat.** From r=1 to r=32, accuracy varies between 93.92% and 94.27%; r=1
+  alone is within 0.23 pp of r=8 using 0.5% of parameters. Strongly supports the "intrinsic rank
+  is low" claim.
+- **FFN_up wins the module sweep.** At r=4, LoRA on the FFN up-projection alone reaches **95.41%**,
+  beating both Q+V and full fine-tuning. Suggests the MLP up-projection is at least as valuable
+  a target as Q+V on this task.
+- **LoRA+ is the strongest extension.** With `lr_B = 16 · lr_A`, LoRA+ hits **94.84%**, exceeding
+  both baseline LoRA and full FT.
+- **LoRA forgets less than full FT.** Wikitext-2 masked-LM perplexity goes from 7.37 (pretrained)
+  to ~5,400 after full FT, but stays ≤ 12 for every LoRA variant. With `α` fixed, *higher* LoRA
+  rank forgets *less* — opposite of the naive intuition, and a direct consequence of the `α / r`
+  scaling factor.
+
+See `results/` for full CSVs and figures, and `report/group_lora_2page_report.md` for the written
+2-page summary.
+
+## 7. Conclusion
+
+The paper's central claim reproduces cleanly on RoBERTa-base / SST-2 with a from-scratch
+implementation: LoRA matches full fine-tuning to within sampling noise while training under 1% of
+parameters and cutting peak GPU memory roughly in half. Beyond the replication, two of our
+extensions produced standalone findings worth flagging — LoRA+ beats both baseline LoRA and full
+fine-tuning (94.84%), and a single-module LoRA on the FFN up-projection at r=4 reaches 95.41%,
+beating every attention-only target. The forgetting probe confirms that low-rank ΔW preserves
+masked-LM ability that full fine-tuning destroys, with the additional twist that higher rank
+forgets less when α is held fixed — pointing to ΔW magnitude rather than rank as the operative
+mechanism. Natural next steps are multiple-seed runs, a LoRA+ ratio sweep at fixed effective
+learning rate, and an AdaLoRA-style adaptive-rank implementation.
+
+## 8. References
+
+- Hu, E. et al. (2021). *LoRA: Low-Rank Adaptation of Large Language Models.* arXiv:2106.09685.
+- Hayou, S., Ghosh, N., Yu, B. (2024). *LoRA+: Efficient Low Rank Adaptation of Large Models.* arXiv:2402.12354.
+- Zhang, Q. et al. (2023). *AdaLoRA: Adaptive Budget Allocation for Parameter-Efficient Fine-Tuning.* arXiv:2303.10512.
+- Liu, Y. et al. (2019). *RoBERTa: A Robustly Optimized BERT Pretraining Approach.* arXiv:1907.11692.
+- Wang, A. et al. (2018). *GLUE: A Multi-Task Benchmark and Analysis Platform for Natural Language Understanding.* arXiv:1804.07461.
+- HuggingFace `transformers`, `datasets`, `accelerate` (https://huggingface.co/docs).
+- Microsoft `loralib` reference implementation (https://github.com/microsoft/LoRA) — referenced for
+  the merge/un-merge pattern; our code is implemented from scratch.
+
+## 9. Acknowledgements
+
+This project was completed as part of **CS 4782: Deep Learning** at Cornell University (Spring
+2026). We thank the course staff for guidance on the replication-with-extensions format and Google
+Colab Pro for the A100 compute that made the full-fine-tuning runs possible.

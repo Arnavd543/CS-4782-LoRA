@@ -1,4 +1,6 @@
-# Standalone eval script:
+# Standalone evaluation utility (not part of the main training/analysis pipeline).
+# The notebook flow uses train.py -> analyze.py -> forgetting.py and does not invoke this script.
+# This file is provided for ad-hoc post-hoc evaluation of a single checkpoint:
 #   python evaluate.py --checkpoint checkpoints/lora_r8_best.pt --config configs/lora_r8.yaml
 
 import argparse
@@ -46,7 +48,7 @@ def print_param_report(model) -> None:
         total += n
         if param.requires_grad:
             trainable += n
-            flag = "✓"
+            flag = "v"
         else:
             flag = " "
         print(flag + " " + format(name, "<58") + format(n, ">10,"))
@@ -73,28 +75,28 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    _, valLoader, numLabels = get_dataloaders(
+    _, val_loader, num_labels = get_dataloaders(
         task=cfg["task"],
-        modelName=cfg["model_name"],
-        batchSize=cfg["batch_size"],
+        model_name=cfg["model_name"],
+        batch_size=cfg["batch_size"],
     )
 
     model = build_model(
-        numLabels=numLabels,
-        modelName=cfg["model_name"],
+        num_labels=num_labels,
+        model_name=cfg["model_name"],
         mode=cfg["mode"],
         rank=cfg.get("rank", 8),
         alpha=cfg.get("alpha", 8.0),
         dropout=cfg.get("lora_dropout", 0.0),
-        targetModules=cfg.get("target_modules", ["query", "value"]),
-        loraInit=cfg.get("lora_init", "paper"),
-        loraMergeWeights=cfg.get("lora_merge_weights", True),
-        loraTrainBias=cfg.get("lora_train_bias", "none"),
+        target_modules=cfg.get("target_modules", ["query", "value"]),
+        lora_init=cfg.get("lora_init", "paper"),
+        lora_merge_weights=cfg.get("lora_merge_weights", True),
+        lora_train_bias=cfg.get("lora_train_bias", "none"),
     ).to(device)
 
     state = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(state, strict=False)
 
     print_param_report(model)
-    acc = evaluate(model, valLoader, device)
+    acc = evaluate(model, val_loader, device)
     print("Validation accuracy: " + format(acc, ".4f"))
